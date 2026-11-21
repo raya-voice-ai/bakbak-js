@@ -128,6 +128,8 @@ class Ctx {
   unfinished = 0;
   lastActivity = 0;
   inputError: { error: unknown } | undefined;
+  /** Called by cancel(): stops any sendStream feeding this context. */
+  readonly onCancel = new Set<() => void>();
 
   constructor(
     readonly session: Session,
@@ -609,18 +611,20 @@ class Session {
   // ---------------------------------------------------------------- cancel
 
   async cancel(ctx: Ctx): Promise<void> {
+    // A sendStream feeding this context stops: it sends nothing more (BEHAVIOR.md §6.3).
+    for (const stop of [...ctx.onCancel]) stop();
     while (ctx.cancel) await ctx.cancel.done.promise;
     const local = ctx.pending;
     ctx.pending = [];
     ctx.heldCount = 0;
     this.withPending.delete(ctx);
-    const doomed = new Set<Req>([...ctx.inflight, ...local]);
-    // Audio that arrived but was not read yet is dropped too: after cancel() the context is silent.
+    // A cancel means silence now: all of the context's audio not yet handed to the caller is
+    // discarded, including audio of requests that already finished.
     for (let i = ctx.qHead; i < ctx.queue.length; i++) {
       const rec = ctx.queue[i] as Rec;
-      if (!rec.taken && rec.event.type === 'chunk' && doomed.has(rec.req)) {
+      if (!rec.taken && rec.event.type === 'chunk') {
         rec.taken = true;
-        rec.req.audioBytes -= rec.event.audio.length;
+        if (!rec.req.settled) rec.req.audioBytes -= rec.event.audio.length;
       }
     }
     const conn = ctx.conn;
@@ -1003,21 +1007,45 @@ export class WebSocketContext {
   ): Promise<void> {
     const ctx = this.#c;
     const segmenter = new Segmenter(options.segmenter);
+    // cancel() on the context stops this stream: nothing more is sent, and it returns.
+    let cancelled = false;
+    const stopped = deferred<{ done: true; value: undefined }>();
+    const stop = () => {
+      cancelled = true;
+      stopped.resolve({ done: true, value: undefined });
+    };
+    ctx.onCancel.add(stop);
+    const iterator =
+      typeof source === 'object' && source !== null && Symbol.asyncIterator in source
+        ? (source as AsyncIterable<unknown>)[Symbol.asyncIterator]()
+        : (source as Iterable<unknown>)[Symbol.iterator]();
     const sendAll = async (sentences: string[]) => {
-      for (const text of sentences) await this.send({ ...options.params, text }, options);
+      for (const text of sentences) {
+        if (cancelled) return;
+        await this.send({ ...options.params, text }, options);
+      }
     };
     try {
-      for await (const piece of source) {
-        const text = textOf(piece);
+      for (;;) {
+        const step = await Promise.race([iterator.next(), stopped.promise]);
+        if (cancelled) {
+          // Let go of the source (e.g. an LLM response) without waiting for it.
+          quiet(Promise.resolve().then(() => iterator.return?.()));
+          break;
+        }
+        if (step.done) break;
+        const text = textOf(step.value);
         if (text) await sendAll(segmenter.push(text));
       }
-      await sendAll(segmenter.flush());
+      if (!cancelled) await sendAll(segmenter.flush());
     } catch (error) {
       if (!ctx.inputEnded) {
         ctx.inputError = { error };
         this.endInput();
       }
       throw error;
+    } finally {
+      ctx.onCancel.delete(stop);
     }
     if (options.endInput !== false) this.endInput();
   }
@@ -1029,7 +1057,10 @@ export class WebSocketContext {
 
   /**
    * Stops the running request and drops the queued ones; each ends as `cancelled`. Resolves
-   * when the API acknowledges. Audio not yet read is discarded. The context stays usable.
+   * when the API acknowledges. All audio not yet read is discarded, including that of
+   * requests that already finished, and a `sendStream()` feeding the context stops (and, as
+   * when its source ends, calls `endInput()` unless given `endInput: false`). Otherwise the
+   * context stays usable.
    */
   cancel(): Promise<void> {
     return this.#c.session.cancel(this.#c);

@@ -272,6 +272,102 @@ describe('WebSocket: sendStream', () => {
   });
 });
 
+describe('WebSocket: cancel means silence now', () => {
+  function cancellingServer(onRequest: (peer: Peer, msg: Record<string, unknown>) => void) {
+    return mock((peer, msg) => {
+      if (msg.cancel)
+        peer.ws.send(JSON.stringify({ type: 'cancelled', done: true, context_id: msg.context_id }));
+      else onRequest(peer, msg);
+    });
+  }
+
+  for (const running of [true, false]) {
+    it(`drops unread audio of finished requests too (${running ? 'one still running' : 'nothing unfinished'})`, async () => {
+      const m = await cancellingServer((peer, msg) => {
+        if (msg.text === 'r1') {
+          for (let i = 0; i < 5; i++)
+            peer.ws.send(
+              JSON.stringify({
+                type: 'chunk',
+                data: b64([1, 1]),
+                context_id: msg.context_id,
+                request_id: 'req_r1',
+              }),
+            );
+          peer.ws.send(
+            JSON.stringify({ type: 'done', done: true, context_id: msg.context_id, request_id: 'req_r1' }),
+          );
+        } else {
+          peer.ws.send(
+            JSON.stringify({
+              type: 'chunk',
+              data: b64([2, 2]),
+              context_id: msg.context_id,
+              request_id: 'req_r2',
+            }),
+          );
+        }
+      });
+      const ws = socketFor(m);
+      const ctx = ws.context();
+      const r1 = await ctx.send({ text: 'r1' });
+      if (running) await ctx.send({ text: 'r2' });
+      await r1.result(); // r1 has finished; its audio waits unread
+      await new Promise((r) => setTimeout(r, 30));
+      await ctx.cancel();
+      ctx.endInput();
+      const after = (await drain(ctx.events())).map((e) => e.type);
+      expect(after).toEqual(running ? ['done', 'cancelled'] : ['done']);
+      expect(m.peers[0]?.received.some((r) => r.cancel)).toBe(running);
+    });
+  }
+
+  it('stops a sendStream feeding the context: nothing more is sent, and it returns promptly', async () => {
+    const m = await cancellingServer((peer, msg) => answer(peer, msg));
+    const ws = socketFor(m);
+    const ctx = ws.context();
+    // A token source whose third token never comes (a slow model); it records return().
+    const tokens = ['पहला वाक्य है। ', 'दूसरा वाक्य है। '];
+    let returned = false;
+    const llm = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            const value = tokens.shift();
+            if (value === undefined) return new Promise<IteratorResult<string>>(() => {});
+            await new Promise((r) => setTimeout(r, 50));
+            return { done: false, value };
+          },
+          return: async () => {
+            returned = true;
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+    };
+    const sending = ctx.sendStream(llm);
+    await waitFor(() => (m.peers[0]?.received.length ?? 0) === 1, 'the first sentence');
+    await new Promise((r) => setTimeout(r, 100));
+    const started = Date.now();
+    await ctx.cancel();
+    await sending;
+    expect(Date.now() - started).toBeLessThan(1_000);
+    const chunksAfter = (await drain(ctx.events())).filter((e) => e.type === 'chunk');
+    expect(chunksAfter).toEqual([]);
+    expect(m.peers[0]?.received.filter((r) => r.text).map((r) => r.text)).toEqual(['पहला वाक्य है।']);
+    await waitFor(() => returned, 'return() on the token source');
+  });
+
+  it('accepts a plain string in sendStream', async () => {
+    const m = await mock((peer, msg) => answer(peer, msg));
+    const ws = socketFor(m);
+    const ctx = ws.context();
+    await ctx.sendStream('Hello there. How are you?');
+    await drain(ctx.events());
+    expect(m.peers[0]?.received.map((r) => r.text)).toEqual(['Hello there.', 'How are you?']);
+  });
+});
+
 describe('WebSocket: limits, timeouts and closes', () => {
   it('waits instead of starting a 17th context while 16 have unfinished requests', async () => {
     const m = await mock(); // answers only when told
