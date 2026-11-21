@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!conformance", "!dist", "!coverage"]
+    "includes": ["**", "!conformance", "!dist", "!coverage", "!CHANGELOG.md"]
   },
   "formatter": {
     "enabled": true,
