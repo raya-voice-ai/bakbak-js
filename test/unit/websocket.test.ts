@@ -675,6 +675,34 @@ describe('WebSocket: limits, timeouts and closes', () => {
     expect(closes).toEqual([1000]);
   });
 
+  it('drops a drained connection within about a second if the peer never answers the close', async () => {
+    const m = await mock((peer, msg) => {
+      if (m.peers.indexOf(peer) === 0) {
+        peer.ws.send(JSON.stringify(drainRefusal(msg)));
+        // Then stop reading, so the close frame is never answered.
+        (peer.ws as unknown as { _socket: { pause(): void } })._socket.pause();
+      } else answer(peer, msg);
+    });
+    const closed: Array<{ at: number; connection: unknown }> = [];
+    const ws = socketFor(m, {
+      logger: {
+        debug: (message, fields) => {
+          if (message === 'websocket: closed')
+            closed.push({ at: Date.now(), connection: fields?.connection });
+        },
+      },
+    });
+    const started = Date.now();
+    await (await ws.context().send({ text: 'x' })).result();
+    await waitFor(
+      () => closed.some((c) => c.connection === 1),
+      'the drained connection to be dropped',
+      3_000,
+    );
+    const first = closed.find((c) => c.connection === 1) as { at: number };
+    expect(first.at - started).toBeLessThan(2_000);
+  });
+
   it('treats a 1000 close with requests unfinished as a 1001: resend at once, no backoff', async () => {
     const m = await mock((peer, msg) => {
       if (m.peers.indexOf(peer) === 0) peer.ws.close(1000, 'bye');

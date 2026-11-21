@@ -652,6 +652,10 @@ class Session {
         } catch {
           // Already closing.
         }
+        // Never wait more than about a second for a peer that does not answer the close.
+        startTimer(() => {
+          if (!conn.closed) this.forceClose(conn, 1001);
+        }, 1_000);
       }
     }
   }
