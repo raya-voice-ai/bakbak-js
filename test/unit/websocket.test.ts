@@ -79,6 +79,19 @@ function answer(
   peer.ws.send(JSON.stringify({ type: 'done', status_code: 200, done: true, ...base }));
 }
 
+function drainRefusal(msg: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: 'error',
+    status_code: 503,
+    done: true,
+    error_code: 'service_unavailable',
+    message: 'The service is restarting. Reconnect and send the request again.',
+    retryable: true,
+    context_id: msg.context_id,
+    request_id: 'req_refused',
+  };
+}
+
 async function drain(events: AsyncIterable<ContextEvent>): Promise<ContextEvent[]> {
   const out: ContextEvent[] = [];
   for await (const e of events) out.push(e);
@@ -403,6 +416,131 @@ describe('WebSocket: limits, timeouts and closes', () => {
     expect(events).toEqual(['new:refused', 'new:other', 'old:first done', 'new:second', 'old:1001']);
     expect(m.peers.length).toBe(2);
     expect(sleeps).toEqual([]); // none of this counts as a retry
+  });
+
+  it('treats 503 service_unavailable without the reconnect phrase as an ordinary retryable error', async () => {
+    // A billing outage: refused every time, the connection stays open. No reconnect storm.
+    const m = await mock((peer, msg) =>
+      peer.ws.send(
+        JSON.stringify({
+          type: 'error',
+          status_code: 503,
+          done: true,
+          error_code: 'service_unavailable',
+          message: 'Balances cannot be checked right now. Retry shortly.',
+          retryable: true,
+          context_id: msg.context_id,
+        }),
+      ),
+    );
+    const sleeps: number[] = [];
+    const ws = socketFor(m, { maxRetries: 2, sleep: recordingSleep(sleeps) });
+    const req = await ws.context().send({ text: 'x' });
+    await expect(req.result()).rejects.toBeInstanceOf(InternalServerError);
+    expect(m.peers.length).toBe(1);
+    expect(m.peers[0]?.received.length).toBe(3);
+    expect(sleeps.length).toBe(2);
+  });
+
+  it('bounds a storm of draining refusals: the first is free, later ones back off and count', async () => {
+    const m = await mock((peer, msg) => peer.ws.send(JSON.stringify(drainRefusal(msg))));
+    const sleeps: number[] = [];
+    const ws = socketFor(m, { maxRetries: 2, sleep: recordingSleep(sleeps) });
+    const req = await ws.context().send({ text: 'x' });
+    const err = await req.result().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InternalServerError);
+    expect((err as InternalServerError).status).toBe(503);
+    // 1 original + 1 free move + 2 counted retries, each on a new connection.
+    expect(m.peers.length).toBe(4);
+    expect(sleeps.length).toBe(2);
+    // The client closes each drained connection itself once nothing is bound to it.
+    await waitFor(
+      () => m.peers.filter((p) => p.ws.readyState === 1).length <= 1,
+      'drained connections to close',
+    );
+  });
+
+  for (const how of ['1001', 'drop'] as const) {
+    it(`resends a request left on a draining connection when it closes (${how})`, async () => {
+      const m = await mock((peer, msg) => {
+        if (m.peers.indexOf(peer) === 0) {
+          if (msg.text === 'b1') peer.ws.send(JSON.stringify(drainRefusal(msg)));
+          return; // a1: accepted, never answered on the draining connection
+        }
+        answer(peer, msg, [1, 2, 3, 4], `req_${String(msg.text)}`);
+        if (msg.text === 'b1') {
+          setTimeout(() => {
+            const old = (m.peers[0] as Peer).ws;
+            if (how === '1001') old.close(1001, 'going away');
+            else old.terminate();
+          }, 30);
+        }
+      });
+      const sleeps: number[] = [];
+      const ws = socketFor(m, { sleep: recordingSleep(sleeps) });
+      const a1 = await ws.context({ contextId: 'A' }).send({ text: 'a1' });
+      await waitFor(() => (m.peers[0]?.received.length ?? 0) === 1, 'a1 on the first connection');
+      const b1 = await ws.context({ contextId: 'B' }).send({ text: 'b1' });
+      expect(await b1.result()).toMatchObject({ requestId: 'req_b1' });
+      expect(await a1.result()).toMatchObject({ requestId: 'req_a1', audioBytes: 4 });
+      expect(m.peers.length).toBe(2);
+      expect(m.peers[1]?.received.map((r) => r.text)).toEqual(['b1', 'a1']);
+      expect(sleeps).toEqual([]);
+    });
+  }
+
+  it('closes a draining connection with 1000 once no context is bound to it', async () => {
+    const closes: number[] = [];
+    const m = await mock((peer, msg) => {
+      if (m.peers.indexOf(peer) === 0) {
+        peer.ws.on('close', (code) => closes.push(code));
+        peer.ws.send(JSON.stringify(drainRefusal(msg))); // and never closes on its own
+      } else answer(peer, msg);
+    });
+    const ws = socketFor(m);
+    const req = await ws.context().send({ text: 'x' });
+    await req.result();
+    await waitFor(() => closes.length === 1, 'the client to close the drained connection');
+    expect(closes).toEqual([1000]);
+  });
+
+  it('treats a 1000 close with requests unfinished as a 1001: resend at once, no backoff', async () => {
+    const m = await mock((peer, msg) => {
+      if (m.peers.indexOf(peer) === 0) peer.ws.close(1000, 'bye');
+      else answer(peer, msg, [5, 5], 'req_again');
+    });
+    const sleeps: number[] = [];
+    const ws = socketFor(m, { sleep: recordingSleep(sleeps) });
+    const req = await ws.context().send({ text: 'x' });
+    expect(await req.result()).toMatchObject({ requestId: 'req_again' });
+    expect(sleeps).toEqual([]);
+  });
+
+  it('does not cut a steadily streaming request on a draining connection', async () => {
+    const m = await mock((peer, msg) => {
+      if (msg.text === 'b') {
+        if (m.peers.indexOf(peer) === 0) peer.ws.send(JSON.stringify(drainRefusal(msg)));
+        else answer(peer, msg);
+        return;
+      }
+      let i = 0;
+      const timer = setInterval(() => {
+        if (peer.ws.readyState !== 1) return clearInterval(timer);
+        if (i++ < 20)
+          peer.ws.send(JSON.stringify({ type: 'chunk', data: b64([1, 2]), context_id: msg.context_id }));
+        else {
+          clearInterval(timer);
+          peer.ws.send(JSON.stringify({ type: 'done', done: true, context_id: msg.context_id }));
+        }
+      }, 30); // 600 ms of audio, never 300 ms of silence
+    });
+    const ws = socketFor(m, { timeout: 300 });
+    const long = await ws
+      .context()
+      .send({ text: 'long', output_format: { container: 'raw', encoding: 'pcm_s16le' } });
+    await new Promise((r) => setTimeout(r, 60));
+    await ws.context().send({ text: 'b' });
+    expect(await long.result()).toMatchObject({ audioBytes: 40 });
   });
 
   it('routes messages about no request to onNotice and keeps going', async () => {

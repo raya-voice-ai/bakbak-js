@@ -56,7 +56,6 @@ class Conn {
   draining = false;
   closed = false;
   closeAs: number | undefined;
-  drainTimer: ReturnType<typeof setTimeout> | undefined;
   readonly gone = deferred<void>();
   constructor(readonly id: number) {}
 }
@@ -72,6 +71,8 @@ class Req {
   error: BakbakError | undefined;
   conn: Conn | undefined;
   retries = 0;
+  /** Draining refusals of this request; only the first one is free (BEHAVIOR.md §6.4). */
+  drainRefusals = 0;
   backoff = false;
   readonly sent = deferred<void>();
   readonly result: Deferred<WebSocketRequestResult>;
@@ -145,12 +146,16 @@ function randomContextId(): string {
   return `ctx_${hex}`;
 }
 
-/** A 503 refusal that means "this connection is draining: reconnect and resend". */
+/**
+ * A draining refusal (BEHAVIOR.md §6.4): status 503 and a message containing the reconnect
+ * phrase. `error_code` alone never marks one: `service_unavailable` also means the service
+ * cannot check balances, and treating that as a drain would reconnect in a tight loop.
+ */
 function isDrainSignal(msg: Record<string, unknown>): boolean {
   return (
     msg.status_code === 503 &&
-    (msg.error_code === 'service_unavailable' ||
-      (typeof msg.message === 'string' && msg.message.includes('Reconnect and send the request again')))
+    typeof msg.message === 'string' &&
+    msg.message.includes('Reconnect and send the request again')
   );
 }
 
@@ -394,11 +399,24 @@ class Session {
       this.pump();
       return;
     }
+    const error = makeStatusError(status, msg);
     if (isDrainSignal(msg)) {
-      this.hold(conn, ctx, req);
+      if (req.drainRefusals++ === 0) {
+        this.hold(conn, ctx, req, 0);
+        return;
+      }
+      // Refused again: an ordinary retryable error, resent on a new connection after a backoff.
+      if (req.retries < this.cfg.maxRetries) {
+        req.retries++;
+        this.hold(conn, ctx, req, backoffMs(req.retries));
+        return;
+      }
+      this.markDraining(conn);
+      this.release(req);
+      this.settle(req, { type: 'failed', error });
+      this.pump();
       return;
     }
-    const error = makeStatusError(status, msg);
     // Resend only if nothing later on this context was sent: a resend would break the order.
     if (error.retryable && ctx.inflight.length === 1 && req.retries < this.cfg.maxRetries) {
       this.detach(req);
@@ -424,26 +442,37 @@ class Session {
     this.pump();
   }
 
+  /** Stops sending on a draining connection; new work goes to a new one (BEHAVIOR.md §6.4). */
+  markDraining(conn: Conn): void {
+    if (conn.draining || conn.closed) return;
+    conn.draining = true;
+    this.debug('connection is draining; moving to a new one', { connection: conn.id });
+    if (this.current === conn) this.current = undefined;
+    quiet(this.ensureConnection());
+  }
+
   /**
-   * A drain refusal (BEHAVIOR.md §6.4): stop sending on this connection and open a new one for
-   * new work. The request is held, with any later ones of its context, and resent in order on
-   * the new connection as soon as its context has nothing unfinished on the draining one.
-   * None of this counts against maxRetries.
+   * A draining refusal: the request is held, with any later ones of its context, and resent
+   * in order on a new connection as soon as its context has nothing unfinished on the
+   * draining one, after `delayMs` (0 for a first refusal, which is not counted as a retry).
    */
-  hold(conn: Conn, ctx: Ctx, req: Req): void {
-    if (!conn.draining) {
-      conn.draining = true;
-      this.debug('connection is draining; moving to a new one', { connection: conn.id });
-      // It closes with 1001 once its accepted requests finish; never wait forever.
-      conn.drainTimer = setTimeout(() => this.forceClose(conn, 1001), this.cfg.timeout);
-      if (this.current === conn) this.current = undefined;
-      quiet(this.ensureConnection());
-    }
+  hold(conn: Conn, ctx: Ctx, req: Req, delayMs: number): void {
+    this.markDraining(conn);
     this.detach(req);
     ctx.pending.splice(ctx.heldCount, 0, req);
     ctx.heldCount++;
     ctx.heldFrom = conn;
     this.withPending.add(ctx);
+    if (delayMs > 0) {
+      req.backoff = true;
+      this.debug('refused again by a draining connection; resending after a backoff', {
+        delayMs: Math.round(delayMs),
+      });
+      this.cfg.sleep(delayMs).then(() => {
+        req.backoff = false;
+        this.pump();
+      }, noop);
+    }
     this.pump();
   }
 
@@ -499,6 +528,16 @@ class Session {
       if (ctx.inflight.length === 0 && ctx.conn === conn) {
         conn.active.delete(ctx);
         ctx.conn = undefined;
+      }
+      if (conn.draining && conn.active.size === 0 && !conn.closed) {
+        // Nothing left to wait for on it: close it rather than wait for the server.
+        this.debug('closing a drained connection', { connection: conn.id });
+        conn.closeAs = 1001;
+        try {
+          conn.socket.close(1000, 'drained');
+        } catch {
+          // Already closing.
+        }
       }
     }
   }
@@ -653,7 +692,6 @@ class Session {
   onClose(conn: Conn, rawCode: number, reason: string): void {
     if (conn.closed) return;
     conn.closed = true;
-    clearTimeout(conn.drainTimer);
     this.conns.delete(conn);
     if (this.current === conn) this.current = undefined;
     conn.gone.resolve();
@@ -707,12 +745,14 @@ class Session {
       }
     }
 
-    if (code === 1001 || conn.draining) {
-      // Going away: reconnect at once and resend; this does not count as a retry.
-      quiet(this.ensureConnection());
+    if (code === 1001 || conn.draining || (code === 1000 && resent > 0)) {
+      // Going away (a 1000 with requests unfinished counts as one): reconnect at once and
+      // resend; this does not count as a retry.
+      if (!this.current) quiet(this.ensureConnection());
+      this.pump();
       return;
     }
-    if (ruleBreak || (code === 1000 && resent === 0)) {
+    if (ruleBreak || code === 1000) {
       this.pump(); // Idle close: the next send reconnects.
       return;
     }
