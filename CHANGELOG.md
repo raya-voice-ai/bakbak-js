@@ -4,6 +4,13 @@ All notable changes to this package are documented here. The format follows
 [Conventional Commits](https://www.conventionalcommits.org/) and the file is maintained by
 release-please.
 
+## [1.0.0-rc.3](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.2...v1.0.0-rc.3) (2026-11-21)
+
+
+### Bug Fixes
+
+* **release:** leave the changelog release-please writes out of the formatter check ([a4df6fa](https://github.com/raya-voice-ai/bakbak-js/commit/a4df6fabe8de4bc098ab05996a993a4ac7de98e0))
+
 ## [1.0.0-rc.2](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.1...v1.0.0-rc.2) (2026-11-21)
 
 
