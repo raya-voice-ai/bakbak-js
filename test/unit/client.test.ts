@@ -381,6 +381,31 @@ describe('AudioStream', () => {
     await expect(stream.requestId).rejects.toThrow('Unauthorized');
   });
 
+  it('aborts the request at once when its ReadableStream is cancelled during a pending read', async () => {
+    let closedAt: number | undefined;
+    const server = await serve((req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sse([chunk([1, 2, 3, 4])]));
+      req.socket.on('close', () => {
+        closedAt = Date.now();
+      });
+      // The next chunk would come 4 s later (a slow sentence).
+      setTimeout(() => {
+        if (!res.destroyed) res.end(sse([chunk([5, 6, 7, 8]), DONE]));
+      }, 4_000);
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    const reader = client.tts.stream(PARAMS).toReadableStream().getReader();
+    await reader.read(); // the first chunk; the stream now waits for the next one
+    await new Promise((r) => setTimeout(r, 100));
+    const cancelledAt = Date.now();
+    await reader.cancel();
+    expect(Date.now() - cancelledAt).toBeLessThan(500);
+    await vi.waitFor(() => expect(closedAt).toBeDefined(), { timeout: 1_000 });
+    expect((closedAt as number) - cancelledAt).toBeLessThan(500);
+    expect(server.requests.length).toBe(1); // and it was not retried
+  });
+
   it('stops the request when the consumer breaks out', async () => {
     let closed = false;
     const server = await serve((req, _body, res) => {

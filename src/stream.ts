@@ -50,12 +50,13 @@ async function* sseChunks(
   params: TTSParams,
   options: RequestOptions | undefined,
   hooks: StreamHooks,
+  cancelled: AbortSignal,
 ): AsyncGenerator<AudioChunk, void, undefined> {
   const body = jsonBody(params, options);
   const maxRetries = retriesOf(cfg, options);
   const signal = options?.signal;
   for (let retry = 0; ; retry++) {
-    const attempt = new Attempt(timeoutOf(cfg, options), signal);
+    const attempt = new Attempt(timeoutOf(cfg, options), signal, cancelled);
     let gotChunk = false;
     let delivered = 0;
     let requestId: string | undefined;
@@ -143,6 +144,7 @@ async function* sseChunks(
       );
     } catch (thrown) {
       if (finished) return; // The audio is complete; a failure while draining does not matter.
+      if (cancelled.aborted) throw cancelled.reason; // The reader went away: never retry.
       let err = toSDKError(thrown, attempt, signal, cfg.apiKey);
       attempt.dispose();
       attempt.controller.abort();
@@ -176,17 +178,25 @@ export class AudioStream implements AsyncIterable<AudioChunk> {
   #consumed = false;
   #metadata: AudioMetadata = {};
   #ready: Deferred<string | undefined>;
+  /** Aborted when the reader goes away, so a pending read stops at once. */
+  #cancel = new AbortController();
 
   /** @internal Use `client.tts.stream()`. */
   constructor(cfg: Config, params: TTSParams, options: RequestOptions | undefined) {
     this.#ready = deferred<string | undefined>();
     this.requestId = quiet(this.#ready.promise);
-    const iterator = sseChunks(cfg, params, options, {
-      onResponse: (metadata) => {
-        this.#metadata = metadata;
+    const iterator = sseChunks(
+      cfg,
+      params,
+      options,
+      {
+        onResponse: (metadata) => {
+          this.#metadata = metadata;
+        },
+        onCommitted: (requestId) => this.#ready.resolve(requestId),
       },
-      onCommitted: (requestId) => this.#ready.resolve(requestId),
-    });
+      this.#cancel.signal,
+    );
     this.#iterator = iterator;
     // Start now, not on first iteration: time to first audio starts with the call.
     this.#first = quiet(this.#watch(iterator.next()));
@@ -232,7 +242,11 @@ export class AudioStream implements AsyncIterable<AudioChunk> {
       },
       return: async () => {
         first = undefined;
-        const result = await iterator.return(undefined);
+        // Abort first: a read may be pending, and return() would otherwise wait for it.
+        this.#cancel.abort(new DOMException('The audio stream was cancelled.', 'AbortError'));
+        const result = await iterator
+          .return(undefined)
+          .catch(() => ({ done: true as const, value: undefined }));
         this.#ready.resolve(this.#metadata.requestId);
         return result;
       },

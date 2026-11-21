@@ -22,16 +22,17 @@ export class Attempt {
   #last = now();
   #limit: number;
   #timer: ReturnType<typeof setTimeout> | undefined;
-  #user: AbortSignal | undefined;
-  #onUserAbort = () => this.controller.abort(this.#user?.reason);
+  #signals: AbortSignal[];
+  #onAbort = (event: Event) => this.controller.abort((event.target as AbortSignal).reason);
 
-  constructor(timeoutMs: number, signal: AbortSignal | undefined) {
+  /** `signals`: the caller's, and the SDK's own (e.g. a cancelled ReadableStream). */
+  constructor(timeoutMs: number, ...signals: Array<AbortSignal | undefined>) {
     this.timeoutMs = timeoutMs;
     this.#limit = timeoutMs;
-    this.#user = signal;
-    if (signal) {
+    this.#signals = signals.filter((s): s is AbortSignal => s !== undefined);
+    for (const signal of this.#signals) {
       if (signal.aborted) this.controller.abort(signal.reason);
-      else signal.addEventListener('abort', this.#onUserAbort, { once: true });
+      else signal.addEventListener('abort', this.#onAbort, { once: true });
     }
     this.#arm(timeoutMs);
   }
@@ -70,7 +71,7 @@ export class Attempt {
 
   dispose(): void {
     clearTimeout(this.#timer);
-    this.#user?.removeEventListener('abort', this.#onUserAbort);
+    for (const signal of this.#signals) signal.removeEventListener('abort', this.#onAbort);
   }
 }
 
