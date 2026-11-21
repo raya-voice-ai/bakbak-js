@@ -11,7 +11,16 @@ import {
   StreamInterruptedError,
   WebSocketClosedError,
 } from '../core/errors';
-import { backoffMs, type Deferred, deferred, noop, now, quiet, retryDelayMs, Signal } from '../core/util';
+import {
+  backoffMs,
+  type Deferred,
+  deferred,
+  now,
+  quiet,
+  retryDelayMs,
+  Signal,
+  startTimer,
+} from '../core/util';
 import { Segmenter, type SegmenterOptions } from '../text/segmenter';
 import { textOf } from '../text/tokens';
 import type { TTSDefaults } from '../types';
@@ -244,7 +253,11 @@ class Session {
           delayMs: Math.round(delay),
           error: err.name,
         });
-        await cfg.sleep(delay);
+        try {
+          await cfg.sleep(delay);
+        } catch {
+          // A sleep that rejects ends the wait early; the attempt still happens.
+        }
         continue;
       }
       if (this.closed) {
@@ -268,7 +281,7 @@ class Session {
     conn.closeAs = as;
     conn.socket.terminate();
     // Some implementations report the close asynchronously or not at all for a dead peer.
-    setTimeout(() => this.onClose(conn, as, 'closed by the client'), 1_000);
+    startTimer(() => this.onClose(conn, as, 'closed by the client'), 1_000);
   }
 
   // ---------------------------------------------------------------- sending
@@ -333,6 +346,7 @@ class Session {
     ctx.pending.push(req);
     ctx.unfinished++;
     this.withPending.add(ctx);
+    this.ensureSweep();
     this.pump();
     return req.sent.promise.then(() => req.facade);
   }
@@ -430,10 +444,9 @@ class Session {
         status,
         delayMs: Math.round(delay),
       });
-      this.cfg.sleep(delay).then(() => {
+      this.afterSleep(delay, () => {
         req.backoff = false;
-        this.pump();
-      }, noop);
+      });
       this.pump();
       return;
     }
@@ -468,12 +481,20 @@ class Session {
       this.debug('refused again by a draining connection; resending after a backoff', {
         delayMs: Math.round(delayMs),
       });
-      this.cfg.sleep(delayMs).then(() => {
+      this.afterSleep(delayMs, () => {
         req.backoff = false;
-        this.pump();
-      }, noop);
+      });
     }
     this.pump();
+  }
+
+  /** Waits (the injectable sleep), then runs `then` and pumps, even if the sleep rejects. */
+  afterSleep(delayMs: number, then: () => void): void {
+    const resume = () => {
+      then();
+      this.pump();
+    };
+    this.cfg.sleep(delayMs).then(resume, resume);
   }
 
   notice(msg: Record<string, unknown>): void {
@@ -635,22 +656,28 @@ class Session {
 
   // ---------------------------------------------------------------- timeouts
 
+  /**
+   * Starts the sweep while anything is unfinished: it enforces the per-context read timeout
+   * and, as a watchdog, pumps requests not yet sent, so none can wait forever.
+   */
   ensureSweep(): void {
-    if (this.sweepTimer || !Number.isFinite(this.cfg.timeout)) return;
-    const tick = Math.max(10, Math.min(1_000, this.cfg.timeout / 4));
+    if (this.sweepTimer || this.closed) return;
+    const timeout = this.cfg.timeout;
+    const tick = Number.isFinite(timeout) ? Math.max(10, Math.min(1_000, timeout / 4)) : 1_000;
     this.sweepTimer = setInterval(() => this.sweep(), tick);
     (this.sweepTimer as { unref?: () => void }).unref?.();
   }
 
   sweep(): void {
     const t = now();
-    let busy = false;
+    let busy = this.withPending.size > 0;
     for (const conn of this.conns) {
       for (const ctx of [...conn.active]) {
         busy = true;
         if (t - ctx.lastActivity >= this.cfg.timeout) this.onContextTimeout(conn, ctx);
       }
     }
+    if (this.withPending.size) this.pump();
     if (!busy) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = undefined;
@@ -773,10 +800,9 @@ class Session {
       return;
     }
     this.reconnectWait = true;
-    this.cfg.sleep(backoffMs(retry)).then(() => {
+    this.afterSleep(backoffMs(retry), () => {
       this.reconnectWait = false;
-      this.pump();
-    }, noop);
+    });
   }
 
   async close(): Promise<void> {
@@ -808,11 +834,12 @@ class Session {
         // Already closing.
       }
     }
+    // Never wait more than about a second for an unresponsive peer (BEHAVIOR.md §6.4).
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       Promise.all(conns.map((c) => c.gone.promise)),
       new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, 2_000);
+        timer = startTimer(resolve, 1_000);
       }),
     ]);
     clearTimeout(timer);

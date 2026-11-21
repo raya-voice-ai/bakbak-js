@@ -1,6 +1,6 @@
 import type { Config, RequestOptions } from './config';
 import { APIConnectionError, APITimeoutError, BakbakError, makeStatusError } from './errors';
-import { now, parseRetryAfter, retryDelayMs, setRetryAfter } from './util';
+import { now, parseRetryAfter, retryDelayMs, setRetryAfter, startTimer } from './util';
 
 /**
  * One HTTP attempt's abort controller and read-inactivity timer. The timer runs from the
@@ -46,8 +46,8 @@ export class Attempt {
   }
 
   #arm(ms: number): void {
-    if (!Number.isFinite(ms)) return;
-    this.#timer = setTimeout(this.#check, ms);
+    // Unref'd: an abandoned, unread stream must not keep the process alive.
+    this.#timer = startTimer(this.#check, ms);
   }
 
   #check = (): void => {

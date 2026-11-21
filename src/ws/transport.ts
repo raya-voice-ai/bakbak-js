@@ -1,7 +1,7 @@
 import type { Logger } from '../core/config';
 import { APIConnectionError, APITimeoutError, BakbakError, makeStatusError } from '../core/errors';
 import { importOptional, type RuntimeInfo } from '../core/runtime';
-import { parseRetryAfter, setRetryAfter } from '../core/util';
+import { finiteTimeout, parseRetryAfter, setRetryAfter, startTimer } from '../core/util';
 
 /** An open WebSocket, whichever library provides it. */
 export interface Socket {
@@ -95,7 +95,7 @@ function openWithWs(WS: WsCtor, o: OpenOptions, h: SocketHandlers): Promise<Sock
     const ws = new WS(o.url, {
       headers: o.headers,
       perMessageDeflate: false,
-      handshakeTimeout: o.connectTimeout,
+      handshakeTimeout: finiteTimeout(o.connectTimeout) ? o.connectTimeout : undefined,
       maxPayload: 64 * 1024 * 1024,
     });
     ws.on('unexpected-response', (req, res) => {
@@ -176,7 +176,7 @@ function openWithGlobal(Native: NativeCtor, o: OpenOptions, h: SocketHandlers): 
     };
     const ws = withHeaders ? new Native(url, { headers: o.headers }) : new Native(url);
     ws.binaryType = 'arraybuffer';
-    const timer = setTimeout(() => {
+    const timer = startTimer(() => {
       fail(new APITimeoutError(`The WebSocket handshake took longer than ${o.connectTimeout} ms.`));
       try {
         ws.close();

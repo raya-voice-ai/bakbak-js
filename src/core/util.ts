@@ -27,6 +27,30 @@ export function quiet<T>(promise: Promise<T>): Promise<T> {
 /** A sleep function: waits `ms` milliseconds, or rejects with the signal's reason when aborted. */
 export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
+/** The longest delay setTimeout accepts; larger values fire after 1 ms instead. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * setTimeout that never fires early: no timer at all for an infinite (or NaN) delay, a
+ * clamped one for a delay beyond setTimeout's range. Unref'd by default, so an SDK timer never
+ * keeps a Node process alive on its own (BEHAVIOR.md §6.6).
+ */
+export function startTimer(
+  fn: () => void,
+  ms: number,
+  unref = true,
+): ReturnType<typeof setTimeout> | undefined {
+  if (Number.isNaN(ms) || ms === Number.POSITIVE_INFINITY) return undefined;
+  const timer = setTimeout(fn, Math.min(Math.max(0, ms), MAX_TIMER_MS));
+  if (unref) (timer as { unref?: () => void }).unref?.();
+  return timer;
+}
+
+/** True for a finite timeout setTimeout can honour as given. */
+export function finiteTimeout(ms: number): boolean {
+  return Number.isFinite(ms) && ms >= 0 && ms <= MAX_TIMER_MS;
+}
+
 export const defaultSleep: SleepFn = (ms, signal) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
@@ -37,10 +61,15 @@ export const defaultSleep: SleepFn = (ms, signal) =>
       clearTimeout(timer);
       reject(signal?.reason);
     };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
+    // A retry wait keeps the process alive: someone is waiting for its outcome.
+    const timer = startTimer(
+      () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      ms,
+      false,
+    );
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
