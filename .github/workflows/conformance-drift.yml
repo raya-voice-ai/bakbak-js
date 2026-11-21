@@ -1,0 +1,36 @@
+name: Conformance drift
+
+# Every official Bakbak client carries the same conformance/ directory. This compares our
+# MANIFEST.sha256 with the other public clients' copies on main, and warns on any difference.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    env:
+      REPOS: raya-voice-ai/bakbak-python raya-voice-ai/bakbak-mcp raya-voice-ai/livekit-plugins-bakbak
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify our own copy
+        run: cd conformance && sha256sum -c --quiet MANIFEST.sha256
+      - name: Compare with the other clients
+        run: |
+          for repo in $REPOS; do
+            url="https://raw.githubusercontent.com/$repo/main/conformance/MANIFEST.sha256"
+            if ! curl -fsSL "$url" -o theirs.sha256; then
+              echo "::warning::Could not fetch $url"
+              continue
+            fi
+            if diff -u theirs.sha256 conformance/MANIFEST.sha256 > drift.diff; then
+              echo "$repo: in sync"
+            else
+              echo "::warning::conformance/ differs from $repo"
+              cat drift.diff
+            fi
+          done

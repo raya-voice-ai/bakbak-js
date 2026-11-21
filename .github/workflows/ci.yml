@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance-manifest:
+    name: Conformance manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify conformance/ against MANIFEST.sha256
+        run: cd conformance && sha256sum -c MANIFEST.sha256
+
+  lint:
+    name: Lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run test:dist
+
+  package:
+    name: Build and package checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: publint and Are The Types Wrong
+        run: npm run check:package
+      - name: Bundle size (main entry under 20 KB gzipped, no ws in browser bundles)
+        run: npm run check:size
+      - name: Pack
+        run: npm pack --dry-run
+
+  runtimes:
+    name: Smoke test on ${{ matrix.runtime }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [bun, deno]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+      - uses: denoland/setup-deno@v2
+        if: matrix.runtime == 'deno'
+        with:
+          deno-version: v2.x
+      - name: Run the smoke test against a local mock
+        run: |
+          node scripts/smoke-server.mjs > server.log &
+          for _ in $(seq 50); do grep -q PORT= server.log && break; sleep 0.1; done
+          PORT=$(grep -o 'PORT=[0-9]*' server.log | cut -d= -f2)
+          if [ "${{ matrix.runtime }}" = bun ]; then
+            bun scripts/smoke-runtime.mjs "http://127.0.0.1:$PORT"
+          else
+            deno run --allow-net --allow-env --allow-read --allow-write scripts/smoke-runtime.mjs "http://127.0.0.1:$PORT"
+          fi
+
+  live:
+    name: Live tests
+    # Real API calls: only on main, and only when the repository has the secrets.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: live
+      cancel-in-progress: false
+    env:
+      BAKBAK_API_KEY: ${{ secrets.BAKBAK_API_KEY }}
+      BAKBAK_BASE_URL: ${{ secrets.BAKBAK_BASE_URL }}
+      BAKBAK_LIVE_WEBSOCKET: ${{ vars.BAKBAK_LIVE_WEBSOCKET || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.BAKBAK_API_KEY != '' && env.BAKBAK_BASE_URL != ''
+      - uses: actions/setup-node@v4
+        if: env.BAKBAK_API_KEY != '' && env.BAKBAK_BASE_URL != ''
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+        if: env.BAKBAK_API_KEY != '' && env.BAKBAK_BASE_URL != ''
+      - run: npm run test:live
+        if: env.BAKBAK_API_KEY != '' && env.BAKBAK_BASE_URL != ''
+      - run: echo "::notice::Live tests skipped; set the BAKBAK_API_KEY and BAKBAK_BASE_URL secrets to run them."
+        if: env.BAKBAK_API_KEY == '' || env.BAKBAK_BASE_URL == ''
