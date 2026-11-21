@@ -122,7 +122,7 @@ describe('dist', () => {
         ws.send(JSON.stringify({ type: 'done', done: true, ...base }));
       });
     });
-    await new Promise<void>((r) => server.listen(0, 'localhost', r));
+    await new Promise<void>((r) => server.listen(0, r));
     try {
       const client = new cjs.Bakbak({
         apiKey: 'k',

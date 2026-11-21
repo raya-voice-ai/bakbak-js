@@ -15,7 +15,7 @@ afterEach(async () => {
 
 async function listen(server: http.Server): Promise<string> {
   servers.push(server);
-  await new Promise<void>((r) => server.listen(0, 'localhost', r));
+  await new Promise<void>((r) => server.listen(0, r));
   return `http://localhost:${(server.address() as AddressInfo).port}`;
 }
 

@@ -104,7 +104,7 @@ async function startServer(exchanges: Exchange[]): Promise<MockServer> {
       else res.end(Buffer.from(response.body_base64, 'base64'));
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, 'localhost', resolve));
+  await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
   return {
     baseURL: `http://localhost:${port}`,

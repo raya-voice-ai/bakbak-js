@@ -9,7 +9,7 @@ const server = http.createServer((_req, res) => {
   res.writeHead(200, { 'content-type': 'text/event-stream' });
   res.write('data: {"type":"chunk","data":"AAAAAA=="}\n\n');
 });
-await new Promise<void>((r) => server.listen(0, 'localhost', r));
+await new Promise<void>((r) => server.listen(0, r));
 const client = new Bakbak({
   apiKey: 'k',
   baseURL: `http://localhost:${(server.address() as AddressInfo).port}`,

@@ -20,7 +20,7 @@ async function wsServer(onMessage: (ws: import('ws').WebSocket, msg: Record<stri
     sockets.push(ws);
     ws.on('message', (d) => onMessage(ws, JSON.parse(String(d))));
   });
-  await new Promise<void>((r) => server.listen(0, 'localhost', r));
+  await new Promise<void>((r) => server.listen(0, r));
   cleanups.push(async () => {
     for (const c of wss.clients) c.terminate();
     server.closeAllConnections();
@@ -63,7 +63,7 @@ describe('timers', () => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       setTimeout(() => res.end('data: {"type":"chunk","data":"AAAAAA=="}\n\ndata: {"type":"done"}\n\n'), 30);
     });
-    await new Promise<void>((r) => httpServer.listen(0, 'localhost', r));
+    await new Promise<void>((r) => httpServer.listen(0, r));
     cleanups.push(() => new Promise<void>((r) => httpServer.close(() => r())));
     const client = new Bakbak({
       apiKey: 'k',

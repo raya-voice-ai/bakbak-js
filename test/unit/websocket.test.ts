@@ -47,7 +47,7 @@ async function mock(onMessage: (peer: Peer, msg: Record<string, unknown>) => voi
       onMessage(peer, msg);
     });
   });
-  await new Promise<void>((r) => server.listen(0, 'localhost', r));
+  await new Promise<void>((r) => server.listen(0, r));
   const m: Mock = {
     url: `http://localhost:${(server.address() as AddressInfo).port}`,
     peers,

@@ -80,7 +80,7 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
-server.listen(Number(process.env.PORT ?? 0), 'localhost', () => {
+server.listen(Number(process.env.PORT ?? 0), () => {
   console.log(`PORT=${server.address().port}`);
 });
 const stop = () => {
