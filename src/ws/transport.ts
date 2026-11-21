@@ -161,6 +161,10 @@ function openWithGlobal(Native: NativeCtor, o: OpenOptions, h: SocketHandlers): 
   const url = withHeaders
     ? o.url
     : `${o.url}${o.url.includes('?') ? '&' : '?'}X-API-Key=${encodeURIComponent(o.apiKey)}`;
+  o.logger?.debug?.('websocket: connecting with the global WebSocket', {
+    url: redactKey(url),
+    key: withHeaders ? 'header' : 'query string',
+  });
   return new Promise((resolve, reject) => {
     let opened = false;
     let failed = false;
@@ -229,8 +233,5 @@ export async function openSocket(o: OpenOptions, h: SocketHandlers): Promise<Soc
       'This runtime has no WebSocket. On Node 20, install the ws package (npm install ws); Node 22+ has one built in.',
     );
   }
-  o.logger?.debug?.('websocket: connecting with the global WebSocket', {
-    url: redactKey(o.runtime.nativeWebSocketHeaders ? o.url : `${o.url}?X-API-Key=${o.apiKey}`),
-  });
   return openWithGlobal(Native, o, h);
 }
