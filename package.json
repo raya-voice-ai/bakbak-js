@@ -1,0 +1,88 @@
+{
+  "name": "bakbak",
+  "version": "1.0.0-rc.1",
+  "description": "Official JavaScript and TypeScript SDK for the Bakbak text-to-speech API by Raya",
+  "license": "Apache-2.0",
+  "author": "Raya Voice AI <support@getraya.app>",
+  "homepage": "https://github.com/raya-voice-ai/bakbak-js#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raya-voice-ai/bakbak-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raya-voice-ai/bakbak-js/issues"
+  },
+  "keywords": [
+    "bakbak",
+    "raya",
+    "tts",
+    "text-to-speech",
+    "speech",
+    "voice",
+    "hindi",
+    "indic",
+    "websocket",
+    "streaming"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "ws": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run --project unit",
+    "test:dist": "npm run build && vitest run --project dist",
+    "test:live": "vitest run --project live",
+    "check:package": "publint --strict && attw --pack . --profile node16",
+    "check:size": "node scripts/check-size.mjs",
+    "check:manifest": "cd conformance && sha256sum -c --quiet MANIFEST.sha256",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:dist && npm run check:package && npm run check:size"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "20.19.43",
+    "@types/ws": "8.18.2",
+    "esbuild": "0.27.7",
+    "publint": "0.3.25",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12",
+    "ws": "8.23.0"
+  }
+}

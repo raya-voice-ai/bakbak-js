@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+.env
+.env.*
+out/
+*.wav
+*.raw
+*.mp3
+.DS_Store
