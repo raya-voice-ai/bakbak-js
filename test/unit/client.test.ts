@@ -158,7 +158,7 @@ describe('requests', () => {
     const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
     // undici returns a socket to its pool a moment after the body ends; give it that moment,
     // as any real gap between calls does.
-    const settle = () => new Promise((r) => setTimeout(r, 5));
+    const settle = () => new Promise((r) => setTimeout(r, 50));
     await client.warmup();
     await settle();
     for (let i = 0; i < 3; i++) {
@@ -261,22 +261,26 @@ describe('read timeout: an inactivity timer between chunks', () => {
   });
 
   it('keeps a slow but steady stream alive past the timeout', async () => {
+    // 12 chunks 50 ms apart take ~600 ms in all, well past the 400 ms timeout, but no gap
+    // between chunks comes near it (generous margins: CI machines run tests in parallel).
     const server = await serve((_req, _body, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       let i = 0;
       const timer = setInterval(() => {
-        if (i++ < 6) res.write(sse([chunk([i, 0])]));
+        if (i++ < 12) res.write(sse([chunk([i, 0])]));
         else {
           clearInterval(timer);
           res.end(sse([DONE]));
         }
-      }, 60);
+      }, 50);
     });
-    const client = new Bakbak({ apiKey: 'k', baseURL: server.url, timeout: 150 });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url, timeout: 400 });
+    const started = Date.now();
     const bytes = await client.tts
       .stream({ ...PARAMS, output_format: { container: 'raw', encoding: 'pcm_s16le' } })
       .bytes();
-    expect(bytes.length).toBe(12); // 6 × 2 bytes over ~420 ms, never 150 ms of silence
+    expect(bytes.length).toBe(24);
+    expect(Date.now() - started).toBeGreaterThan(400);
   });
 
   it('raises StreamInterruptedError when a whole-file body stalls after its first bytes', async () => {
