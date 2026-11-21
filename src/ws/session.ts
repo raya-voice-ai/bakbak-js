@@ -52,10 +52,44 @@ export type ContextEvent =
 
 type Outcome = { type: 'done' } | { type: 'failed'; error: BakbakError } | { type: 'cancelled' };
 
+/**
+ * One event, queued for the context's reader and for its request's reader. Whichever takes
+ * it first gets it; taking it drops the event (and its audio) at once (BEHAVIOR.md §6.6).
+ */
 interface Rec {
-  event: ContextEvent;
+  event: ContextEvent | undefined;
   req: Req;
   taken: boolean;
+}
+
+/** Drops consumed records from a context's queue: the taken prefix, and others in bulk. */
+function compact(ctx: Ctx): void {
+  const q = ctx.queue;
+  while (ctx.qHead < q.length && (q[ctx.qHead] === undefined || (q[ctx.qHead] as Rec).taken)) {
+    if (q[ctx.qHead] !== undefined) ctx.takenAhead--;
+    q[ctx.qHead++] = undefined as unknown as Rec;
+  }
+  const live = q.length - ctx.qHead;
+  if (ctx.qHead > 256 && ctx.qHead * 2 >= q.length) {
+    ctx.queue = q.slice(ctx.qHead);
+    ctx.qHead = 0;
+  } else if (ctx.takenAhead > 256 && ctx.takenAhead * 2 >= live) {
+    ctx.queue = q.slice(ctx.qHead).filter((r) => !r.taken);
+    ctx.qHead = 0;
+    ctx.takenAhead = 0;
+  }
+}
+
+function take(rec: Rec): ContextEvent {
+  const event = rec.event as ContextEvent;
+  rec.taken = true;
+  rec.event = undefined;
+  if (event.type !== 'chunk') {
+    // The request's last event: nothing more will be queued for it.
+    rec.req.recs = [];
+    rec.req.rHead = 0;
+  }
+  return event;
 }
 
 class Conn {
@@ -123,6 +157,8 @@ class Ctx {
   cancel: CancelState | undefined;
   queue: Rec[] = [];
   qHead = 0;
+  /** Records in `queue` past `qHead` taken by request readers, for compaction. */
+  takenAhead = 0;
   readonly signal = new Signal();
   inputEnded = false;
   unfinished = 0;
@@ -342,6 +378,15 @@ class Session {
         new BakbakError(`endInput() was called on context ${ctx.id}; use a new context.`),
       );
     }
+    const registered = this.contexts.get(ctx.id);
+    if (registered !== ctx) {
+      if (registered) {
+        return Promise.reject(
+          new BakbakError(`Another context with id ${ctx.id} is open on this WebSocket.`),
+        );
+      }
+      this.contexts.set(ctx.id, ctx);
+    }
     const body = merge(this.defaults, ctx.defaults, params, extraBody, { context_id: ctx.id });
     const format = body.output_format as { encoding?: string } | undefined;
     const req = new Req(ctx, JSON.stringify(body), sampleBytes(format ? format.encoding : 'pcm_f32le'));
@@ -523,12 +568,7 @@ class Session {
     const rec: Rec = { event, req, taken: false };
     ctx.queue.push(rec);
     req.recs.push(rec);
-    // Drop records already taken by the other reader, so neither buffer grows without bound.
-    while (ctx.qHead < ctx.queue.length && (ctx.queue[ctx.qHead] as Rec).taken) ctx.qHead++;
-    if (ctx.qHead > 256 && ctx.qHead * 2 >= ctx.queue.length) {
-      ctx.queue = ctx.queue.slice(ctx.qHead);
-      ctx.qHead = 0;
-    }
+    compact(ctx);
     while (req.rHead < req.recs.length && (req.recs[req.rHead] as Rec).taken) req.rHead++;
     if (req.rHead > 64 && req.rHead * 2 >= req.recs.length) {
       req.recs = req.recs.slice(req.rHead);
@@ -567,7 +607,7 @@ class Session {
 
   release(req: Req): void {
     this.detach(req);
-    this.maybeRetire(req.ctx);
+    this.maybeRelease(req.ctx);
   }
 
   settle(req: Req, outcome: Outcome): void {
@@ -587,11 +627,16 @@ class Session {
       req.result.reject(outcome.error);
     }
     req.sent.resolve();
-    this.maybeRetire(ctx);
+    this.maybeRelease(ctx);
   }
 
-  maybeRetire(ctx: Ctx): void {
-    if (ctx.inputEnded && ctx.unfinished === 0 && ctx.inflight.length === 0 && !ctx.cancel) {
+  /**
+   * A context with nothing unfinished and nothing queued leaves the routing table, so a
+   * long-lived handle does not grow with every context it served; its next send registers it
+   * again (BEHAVIOR.md §6.6).
+   */
+  maybeRelease(ctx: Ctx): void {
+    if (ctx.unfinished === 0 && ctx.pending.length === 0 && ctx.inflight.length === 0 && !ctx.cancel) {
       if (this.contexts.get(ctx.id) === ctx) this.contexts.delete(ctx.id);
       this.withPending.delete(ctx);
       ctx.signal.notify();
@@ -622,15 +667,17 @@ class Session {
     // discarded, including audio of requests that already finished.
     for (let i = ctx.qHead; i < ctx.queue.length; i++) {
       const rec = ctx.queue[i] as Rec;
-      if (!rec.taken && rec.event.type === 'chunk') {
-        rec.taken = true;
-        if (!rec.req.settled) rec.req.audioBytes -= rec.event.audio.length;
+      if (!rec.taken && rec.event?.type === 'chunk') {
+        const event = take(rec) as { audio: Uint8Array };
+        if (!rec.req.settled) rec.req.audioBytes -= event.audio.length;
+        ctx.takenAhead++;
       }
     }
+    compact(ctx);
     const conn = ctx.conn;
     if (!conn || ctx.inflight.length === 0) {
       for (const req of local) this.settle(req, { type: 'cancelled' });
-      this.maybeRetire(ctx);
+      this.maybeRelease(ctx);
       return;
     }
     const done = deferred<void>();
@@ -654,7 +701,7 @@ class Session {
     }
     for (const req of state.local) this.settle(req, { type: 'cancelled' });
     state.done.resolve();
-    this.maybeRetire(ctx);
+    this.maybeRelease(ctx);
     this.pump();
   }
 
@@ -765,7 +812,7 @@ class Session {
         this.withPending.add(ctx);
         resent += back.length;
       }
-      this.maybeRetire(ctx);
+      this.maybeRelease(ctx);
     }
     conn.active.clear();
     conn.unfinished = 0;
@@ -862,14 +909,13 @@ class Session {
       );
     }
     if (this.contexts.has(id)) throw new BakbakError(`Context ${id} is already open on this WebSocket.`);
-    const ctx = new Ctx(this, id, defaults);
-    this.contexts.set(id, ctx);
-    return ctx;
+    // Registered for routing on its first send, and released whenever it is idle.
+    return new Ctx(this, id, defaults);
   }
 
   endInput(ctx: Ctx): void {
     ctx.inputEnded = true;
-    this.maybeRetire(ctx);
+    this.maybeRelease(ctx);
     ctx.signal.notify();
   }
 }
@@ -909,24 +955,24 @@ export class WebSocketRequest {
   }
 
   /**
-   * This request's audio. Each chunk is delivered once: to this iterator or to
+   * This request's audio. Each event is delivered once: to this iterator or to
    * `ctx.events()`/`ctx.audio()`, whichever reads it first, so read a context one way.
-   * (Terminal events still reach `ctx.events()`.) Throws the request's error if it failed.
+   * Throws the request's error if it failed.
    */
   async *audio(): AsyncGenerator<Uint8Array, void, undefined> {
     const req = this.#r;
     for (;;) {
       while (req.rHead < req.recs.length) {
         const rec = req.recs[req.rHead++] as Rec;
-        const event = rec.event;
-        if (event.type !== 'chunk') {
-          // Terminal events stay visible to ctx.events(); only audio is delivered once.
-          if (event.type === 'failed') throw event.error;
-          return;
-        }
         if (rec.taken) continue;
-        rec.taken = true;
-        yield event.audio;
+        req.ctx.takenAhead++;
+        const event = take(rec);
+        if (event.type === 'chunk') {
+          yield event.audio;
+          continue;
+        }
+        if (event.type === 'failed') throw event.error;
+        return;
       }
       if (req.settled) {
         if (req.error) throw req.error;
@@ -1074,10 +1120,15 @@ export class WebSocketContext {
     const ctx = this.#c;
     for (;;) {
       while (ctx.qHead < ctx.queue.length) {
-        const rec = ctx.queue[ctx.qHead++] as Rec;
-        if (rec.taken) continue;
-        rec.taken = true;
-        yield rec.event;
+        const rec = ctx.queue[ctx.qHead] as Rec;
+        ctx.queue[ctx.qHead++] = undefined as unknown as Rec; // free the slot at once
+        if (rec.taken) {
+          ctx.takenAhead--;
+          continue;
+        }
+        const event = take(rec);
+        compact(ctx);
+        yield event;
       }
       if (ctx.inputEnded && ctx.unfinished === 0) {
         if (ctx.inputError) throw ctx.inputError.error;

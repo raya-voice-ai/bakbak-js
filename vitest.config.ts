@@ -8,6 +8,8 @@ export default defineConfig({
           name: 'unit',
           include: ['test/unit/**/*.test.ts', 'test/conformance/**/*.test.ts'],
           testTimeout: 20_000,
+          // Memory tests force collections with gc().
+          execArgv: ['--expose-gc'],
         },
       },
       {

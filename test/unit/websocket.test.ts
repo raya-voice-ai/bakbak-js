@@ -144,8 +144,6 @@ describe('WebSocket: contexts', () => {
     expect(ws.context().contextId).toMatch(/^ctx_[0-9a-f]{32}$/);
     expect(() => ws.context({ contextId: 'bad id' })).toThrow(BakbakError);
     expect(() => ws.context({ contextId: 'x'.repeat(129) })).toThrow(BakbakError);
-    ws.context({ contextId: 'a.b_c-1' });
-    expect(() => ws.context({ contextId: 'a.b_c-1' })).toThrow(/already open/);
     expect(m.peers.length).toBe(0);
   });
 
@@ -193,8 +191,8 @@ describe('WebSocket: contexts', () => {
     expect(await one.result()).toEqual({ requestId: 'one', audioBytes: 2, cancelled: false });
     ctx.endInput();
     const rest = await drain(ctx.events());
+    // one's events, its done included, went to its own iterator; each event is read once.
     expect(rest.map((e) => [e.type, e.request === two])).toEqual([
-      ['done', false], // one's terminal event was not read by its audio iterator
       ['chunk', true],
       ['done', true],
     ]);
@@ -218,6 +216,81 @@ describe('WebSocket: contexts', () => {
     const sizes: number[] = [];
     for await (const a of ctx.audio()) sizes.push(a.length);
     expect(sizes).toEqual([4, 4]);
+  });
+});
+
+describe('WebSocket: resource lifetime (BEHAVIOR.md §6.6)', () => {
+  it('refuses a second context with the id of a busy one', async () => {
+    const m = await mock(); // never answers
+    const ws = socketFor(m);
+    await ws.context({ contextId: 'same' }).send({ text: 'x' });
+    expect(() => ws.context({ contextId: 'same' })).toThrow(/already open/);
+  });
+
+  const CHUNK = Buffer.alloc(16_384, 7).toString('base64');
+  const fourChunks = (peer: Peer, msg: Record<string, unknown>) => {
+    for (let i = 0; i < 4; i++)
+      peer.ws.send(
+        JSON.stringify({ type: 'chunk', data: CHUNK, context_id: msg.context_id, request_id: 'r' }),
+      );
+    peer.ws.send(JSON.stringify({ type: 'done', done: true, context_id: msg.context_id, request_id: 'r' }));
+  };
+  // Retained heap and buffers, in MB, after a full collection (needs --expose-gc; else skipped).
+  const gc = (globalThis as { gc?: () => void }).gc;
+  const retained = () => {
+    gc?.();
+    gc?.();
+    return (process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers) / 1e6;
+  };
+
+  for (const reader of ['req.audio()', 'ctx.events()'] as const) {
+    it(`keeps memory flat over 400 turns on one context read with ${reader}`, async () => {
+      const m = await mock(fourChunks);
+      const ws = socketFor(m);
+      const ctx = ws.context({ contextId: 'agent' });
+      const events = ctx.events();
+      const turn = async () => {
+        const req = await ctx.send({ text: 'turn' });
+        if (reader === 'req.audio()') {
+          for await (const _ of req.audio()) {
+            // consume
+          }
+        } else {
+          for (;;) {
+            const { value } = await events.next();
+            if (value?.type !== 'chunk') break;
+          }
+        }
+      };
+      for (let i = 0; i < 50; i++) await turn();
+      const base = retained();
+      for (let i = 0; i < 400; i++) await turn(); // 400 × 64 KiB = 26 MB of audio read
+      if (gc) expect(retained() - base).toBeLessThan(8);
+    });
+  }
+
+  it('releases contexts that are idle, even without endInput()', async () => {
+    const m = await mock(fourChunks);
+    const ws = socketFor(m);
+    const run = async () => {
+      const ctx = ws.context();
+      await ctx.send({ text: 'x' });
+      for await (const e of ctx.events()) if (e.type !== 'chunk') break;
+    };
+    for (let i = 0; i < 50; i++) await run();
+    const base = retained();
+    for (let i = 0; i < 400; i++) await run();
+    if (gc) expect(retained() - base).toBeLessThan(8);
+  });
+
+  it('lets an idle context send again after it was released', async () => {
+    const m = await mock((peer, msg) => answer(peer, msg));
+    const ws = socketFor(m);
+    const ctx = ws.context({ contextId: 'reuse' });
+    for (let i = 0; i < 3; i++) {
+      const req = await ctx.send({ text: `t${i}` });
+      expect(await req.result()).toMatchObject({ audioBytes: 4 });
+    }
   });
 });
 
