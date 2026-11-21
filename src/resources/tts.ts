@@ -3,7 +3,8 @@ import type { Config, RequestOptions } from '../core/config';
 import { BakbakError, interruptedBy } from '../core/errors';
 import { Attempt, fetchOk, jsonBody, retriesOf, timeoutOf, toSDKError, waitToRetry } from '../core/http';
 import { AudioStream } from '../stream';
-import type { TTSParams } from '../types';
+import type { TTSDefaults, TTSParams } from '../types';
+import { TTSWebSocket } from '../ws/session';
 
 async function readAll(res: Response, attempt: Attempt, onBytes: (n: number) => void): Promise<Uint8Array> {
   if (!res.body) return new Uint8Array(0);
@@ -93,5 +94,14 @@ export class TTS {
    */
   stream(params: TTSParams, options?: RequestOptions): AudioStream {
     return new AudioStream(this.#cfg, params, options);
+  }
+
+  /**
+   * A WebSocket for many streaming requests on one connection, in ordered contexts. The
+   * given fields apply to every request it sends. Call `connect()` to open it ahead of the
+   * first request, and `close()` when done.
+   */
+  websocket(defaults: TTSDefaults = {}): TTSWebSocket {
+    return new TTSWebSocket(this.#cfg, defaults);
   }
 }

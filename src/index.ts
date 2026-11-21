@@ -32,9 +32,21 @@ export type {
   Model,
   OutputFormat,
   SampleRate,
+  TTSDefaults,
   TTSParams,
   Voice,
   VoiceFilter,
   VoiceList,
 } from './types';
 export { VERSION } from './version';
+export type {
+  ContextEvent,
+  ContextOptions,
+  ContextSendOptions,
+  ContextSendParams,
+  SendStreamOptions,
+  TTSWebSocket,
+  WebSocketContext,
+  WebSocketRequest,
+  WebSocketRequestResult,
+} from './ws/session';
