@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BakbakError, Segmenter, type SegmenterOptions, splitSentences } from '../../src/index';
 import { CONFORMANCE } from '../helpers';
@@ -144,5 +146,68 @@ describe('segmenter: code points', () => {
   it('rejects maxChars above the API limit', () => {
     expect(() => new Segmenter({ maxChars: 5001 })).toThrow(BakbakError);
     expect(() => new Segmenter({ maxChars: 5000 })).not.toThrow();
+  });
+});
+
+describe('segmenter: UTF-16 streams', () => {
+  it('carries a high surrogate across pushes', () => {
+    const text = 'नमस्ते 😀। 𝐀𝐁 दूसरा 🙏🏽 वाक्य है। आख़िरी 𠀀';
+    const expected = splitSentences(text);
+    const s = new Segmenter();
+    const out: string[] = [];
+    for (let i = 0; i < text.length; i++) out.push(...s.push(text[i] as string)); // one UTF-16 unit
+    out.push(...s.flush());
+    expect(out).toEqual(expected);
+    expect(out.join('')).not.toMatch(/\uFFFD/);
+  });
+});
+
+describe('segmenter: linear time (BEHAVIOR.md §7)', () => {
+  const inputs: Array<[string, string]> = [
+    ['punctuated', 'यह एक छोटा सा वाक्य है जो परीक्षण के लिए है। '.repeat(4400)],
+    ['no punctuation', 'शब्द '.repeat(40_000)],
+    ['no punctuation or spaces', 'क'.repeat(200_000)],
+  ];
+  for (const [name, text] of inputs) {
+    it(`splits 200k characters (${name}) in well under a second, whole or streamed`, () => {
+      let started = performance.now();
+      const whole = splitSentences(text);
+      const batch = performance.now() - started;
+      started = performance.now();
+      const s = new Segmenter();
+      const streamed: string[] = [];
+      for (let i = 0; i < text.length; i += 4) streamed.push(...s.push(text.slice(i, i + 4)));
+      streamed.push(...s.flush());
+      const stream = performance.now() - started;
+      expect(streamed).toEqual(whole);
+      expect(batch).toBeLessThan(1_000);
+      expect(stream).toBeLessThan(1_000);
+    });
+  }
+});
+
+describe('segmenter: fuzz against the reference', () => {
+  const generator = fileURLToPath(new URL('../../scripts/segmenter-fuzz.py', import.meta.url));
+  const run = spawnSync('python3', ['-B', generator, '20261121', '1500'], {
+    encoding: 'utf8',
+    maxBuffer: 64 << 20,
+  });
+  const available = run.status === 0;
+  it.skipIf(!available)('matches reference.py on random text, however it is pushed', () => {
+    const cases = JSON.parse(run.stdout) as Array<{
+      text: string;
+      options: Case['options'];
+      sentences: string[];
+    }>;
+    const random = rng(7);
+    for (const c of cases) {
+      const options = toOptions(c.options);
+      expect(splitSentences(c.text, options), JSON.stringify(c)).toEqual(c.sentences);
+      const units = Array.from({ length: c.text.length }, (_, i) => c.text[i] as string);
+      expect(pushAll(units, options), `UTF-16 units: ${JSON.stringify(c)}`).toEqual(c.sentences);
+      for (const pieces of chunkings(c.text, random).slice(0, 4)) {
+        expect(pushAll(pieces, options), JSON.stringify(pieces)).toEqual(c.sentences);
+      }
+    }
   });
 });

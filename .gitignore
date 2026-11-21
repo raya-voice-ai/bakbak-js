@@ -9,3 +9,4 @@ node_modules/
 *.raw
 *.mp3
 .DS_Store
+__pycache__/

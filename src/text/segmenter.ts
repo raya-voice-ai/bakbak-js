@@ -183,25 +183,69 @@ function dotIsBoundary(t: CodePoints, dot: number, nextChar: string): boolean {
 }
 
 /**
- * Boundary candidates in t[start:], in order. `clause`, when given, is [groupStart,
- * firstClauseMinChars]: soft delimiters followed by whitespace also count, if the stripped
- * text from groupStart through the delimiter is long enough.
+ * Finds the next character that can start a candidate (a newline, a terminator, or with
+ * `clause` a soft delimiter), remembering its last answer: the wrap path asks again from a
+ * later start many times, and without the memo a long text with no punctuation would be
+ * scanned once per piece (the reference's `_NextSpecial`).
  */
-function candidates(
+class NextSpecial {
+  readonly #t: CodePoints;
+  /**
+   * Per mode (0: plain, 1: with clauses), [lo, hi]: no special character in t[lo:hi]. Kept by
+   * the Segmenter across pushes, so streaming does not rescan the open group either.
+   */
+  readonly #memo: Array<[number, number]>;
+
+  constructor(t: CodePoints, memo: Array<[number, number]>) {
+    this.#t = t;
+    this.#memo = memo;
+  }
+
+  find(i: number, clause: boolean): number {
+    const memo = this.#memo[clause ? 1 : 0] as [number, number];
+    const known = memo[0] <= i && i <= memo[1];
+    const t = this.#t;
+    let j = known ? memo[1] : i;
+    for (; j < t.length; j++) {
+      const ch = t[j] as string;
+      if (ch === '\n' || TERMINATORS.has(ch) || (clause && SOFT_DELIMITERS.has(ch))) break;
+    }
+    if (!known) memo[0] = i;
+    memo[1] = j;
+    return j;
+  }
+}
+
+function freshMemo(): Array<[number, number]> {
+  return [
+    [-1, -1],
+    [-1, -1],
+  ];
+}
+
+/**
+ * Boundary candidates in t[start:], in order, produced lazily: callers stop at the first one
+ * that ends a group, which keeps segmentation linear in the length of the text. `clause`,
+ * when given, is [groupStart, firstClauseMinChars]: soft delimiters followed by whitespace
+ * also count, if the stripped text from groupStart through the delimiter is long enough.
+ */
+function* candidates(
   t: CodePoints,
   start: number,
   final: boolean,
   clause: [number, number] | undefined,
-): Candidate[] {
-  const out: Candidate[] = [];
+  next: NextSpecial,
+): Generator<Candidate, void, undefined> {
   const n = t.length;
   let i = start;
   while (i < n) {
+    i = next.find(i, clause !== undefined); // skip ordinary characters
+    if (i >= n) break;
     const ch = t[i] as string;
     if (ch === '\n') {
       let j = i;
       while (j < n && WHITESPACE.has(t[j] as string)) j++;
-      out.push({ end: i, decided: final || j < n, boundary: true });
+      yield { end: i, decided: final || j < n, boundary: true };
       i = j;
       continue;
     }
@@ -219,8 +263,8 @@ function candidates(
     const end = j;
     if (j >= n) {
       // Nothing after the run yet: undecided unless final (the end of text is a boundary anyway).
-      if (!final) out.push({ end, decided: false, boundary: false });
-      break;
+      if (!final) yield { end, decided: false, boundary: false };
+      return;
     }
     if (!WHITESPACE.has(t[j] as string)) {
       i = j; // e.g. "3.14", "a.com", "है।राहुल": not a candidate
@@ -229,16 +273,15 @@ function candidates(
     let k = j;
     while (k < n && WHITESPACE.has(t[k] as string)) k++;
     if (k >= n && !final) {
-      out.push({ end, decided: false, boundary: false });
-      break;
+      yield { end, decided: false, boundary: false };
+      return;
     }
     const nextChar = k < n ? (t[k] as string) : '';
     const boundary =
       isClause || runEnd - runStart !== 1 || t[runStart] !== '.' || dotIsBoundary(t, runStart, nextChar);
-    out.push({ end, decided: true, boundary });
+    yield { end, decided: true, boundary };
     i = k;
   }
-  return out;
 }
 
 /** Where to cut the window t[start:start+maxChars]; returns an index > start. */
@@ -263,14 +306,26 @@ function wrapCut(t: CodePoints, start: number, maxChars: number): number {
 }
 
 /**
- * How much text before the group start a streaming segmenter must keep. Two decisions look
- * behind the group start: the word before a "." (which, after a hard cut, began before the
- * group) and whether a list marker starts a line. Keeping the word the group starts in, the
- * spaces or tabs before it and one more character answers both as the whole text would.
+ * The look-behind only asks whether the word before a "." is one of these short words (or a
+ * single letter, or 1-3 digits). A word longer than the longest of them answers "no" however
+ * much of it is kept, so keeping this many of its code points is enough.
+ */
+const LOOKBEHIND_WORD = Math.max(...[...TITLES, ...AMBIGUOUS].map((w) => Array.from(w).length)) + 2;
+
+/**
+ * How much text before the group start a streaming segmenter must keep (the reference's
+ * `_keep_from`). Two decisions look behind the group start: the word before a "." (which,
+ * after a hard cut, began before the group) and whether a list marker starts a line. Keeping
+ * the word the group starts in, the spaces or tabs before it and one more character answers
+ * both as the whole text would. Of a long word only LOOKBEHIND_WORD code points are kept, so
+ * text without spaces does not pile up in the buffer.
  */
 function keepFrom(t: CodePoints, gs: number): number {
   let i = gs;
-  while (i > 0 && isWordChar(t[i - 1] as string)) i--;
+  while (i > 0 && isWordChar(t[i - 1] as string)) {
+    if (gs - i >= LOOKBEHIND_WORD) return i; // long enough to match nothing; no line start needed
+    i--;
+  }
   while (i > 0 && (t[i - 1] === ' ' || t[i - 1] === '\t')) i--;
   return i > 0 ? i - 1 : 0;
 }
@@ -297,6 +352,9 @@ function resolveOptions(options: SegmenterOptions = {}): Required<SegmenterOptio
 export class Segmenter {
   #o: Required<SegmenterOptions>;
   #buf: CodePoints = [];
+  /** A high surrogate that ended the last push: its pair comes with the next one. */
+  #high = '';
+  #memo = freshMemo();
   /** Where the current group starts in #buf; what comes before it is look-behind only. */
   #gs = 0;
   #first = true;
@@ -309,14 +367,27 @@ export class Segmenter {
 
   /** Adds text; returns the sentences it completed. */
   push(text: string): string[] {
-    for (const ch of text) this.#buf.push(ch);
+    let piece = this.#high ? this.#high + text : text;
+    this.#high = '';
+    // A UTF-16 stream can split a surrogate pair between pushes; keep the half for later.
+    const last = piece.charCodeAt(piece.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) {
+      this.#high = piece.slice(-1);
+      piece = piece.slice(0, -1);
+    }
+    for (const ch of piece) this.#buf.push(ch);
     return this.#drain(false);
   }
 
   /** Ends the input; returns the remaining sentences and resets the segmenter for reuse. */
   flush(): string[] {
+    if (this.#high) {
+      this.#buf.push(this.#high); // an unpaired surrogate at the very end stays as it is
+      this.#high = '';
+    }
     const out = this.#drain(true);
     this.#buf = [];
+    this.#memo = freshMemo();
     this.#gs = 0;
     this.#first = true;
     this.#wrapping = false;
@@ -336,13 +407,15 @@ export class Segmenter {
     const o = this.#o;
     const out: string[] = [];
     const t = this.#buf;
+    const next = new NextSpecial(t, this.#memo);
     let gs = skipWs(t, this.#gs); // group start
     for (;;) {
       const clause: [number, number] | undefined =
         o.eagerFirstClause && this.#first ? [gs, o.firstClauseMinChars] : undefined;
-      const cands = candidates(t, gs, final, clause);
       let emitted = false;
-      for (const c of cands) {
+      let firstOpen: number | undefined; // the first candidate that is a boundary or undecided
+      for (const c of candidates(t, gs, final, clause, next)) {
+        if (firstOpen === undefined && (!c.decided || c.boundary)) firstOpen = c.end;
         if (!c.decided) break;
         if (!c.boundary) continue;
         const [a, b] = strip(t, gs, c.end);
@@ -361,12 +434,10 @@ export class Segmenter {
       // No boundary closes a group of acceptable size. Wrap if the group is certainly
       // longer than maxChars.
       const limit = gs + o.maxChars;
-      const firstOpen = cands.find((c) => !c.decided || c.boundary)?.end;
-      const [ra, rb] = strip(t, gs, t.length);
-      const restLength = rb - ra;
-      let certainlyLong = (firstOpen === undefined || firstOpen > limit) && t.length > limit;
-      if (final && restLength > o.maxChars) certainlyLong = true;
-      if (certainlyLong && restLength > o.maxChars) {
+      // The stripped rest is longer than maxChars exactly when something other than
+      // whitespace lies at or beyond `limit` (gs is not whitespace).
+      const longRest = skipWs(t, limit) < t.length;
+      if (longRest && (final || firstOpen === undefined || firstOpen > limit)) {
         const cut = wrapCut(t, gs, o.maxChars);
         const [a, b] = strip(t, gs, cut);
         this.#emit(out, t, a, b);
@@ -375,6 +446,7 @@ export class Segmenter {
         continue;
       }
       if (final) {
+        const [ra, rb] = strip(t, gs, t.length);
         this.#emit(out, t, ra, rb);
         gs = t.length;
       }
@@ -383,6 +455,15 @@ export class Segmenter {
     const keep = keepFrom(t, gs);
     this.#buf = keep ? t.slice(keep) : t;
     this.#gs = gs - keep;
+    for (const m of this.#memo) {
+      // The trimmed text shifts left; a region that falls off the front is forgotten.
+      m[0] = Math.max(0, m[0] - keep);
+      m[1] -= keep;
+      if (m[1] < 0) {
+        m[0] = -1;
+        m[1] = -1;
+      }
+    }
     return out;
   }
 }
