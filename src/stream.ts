@@ -143,7 +143,7 @@ async function* sseChunks(
       );
     } catch (thrown) {
       if (finished) return; // The audio is complete; a failure while draining does not matter.
-      let err = toSDKError(thrown, attempt, signal);
+      let err = toSDKError(thrown, attempt, signal, cfg.apiKey);
       attempt.dispose();
       attempt.controller.abort();
       if (gotChunk) {

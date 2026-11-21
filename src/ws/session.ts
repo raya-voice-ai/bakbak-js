@@ -9,6 +9,8 @@ import {
   makeInterruptedFromEvent,
   makeStatusError,
   StreamInterruptedError,
+  safeCause,
+  scrub,
   WebSocketClosedError,
 } from '../core/errors';
 import {
@@ -250,9 +252,7 @@ class Session {
         },
         (err: unknown) => {
           this.connecting = undefined;
-          this.failPending(
-            err instanceof BakbakError ? err : new APIConnectionError(String(err), { cause: err }),
-          );
+          this.failPending(this.asConnectionError(err));
         },
       );
     }
@@ -282,8 +282,7 @@ class Session {
           },
         );
       } catch (thrown) {
-        const err =
-          thrown instanceof BakbakError ? thrown : new APIConnectionError(String(thrown), { cause: thrown });
+        const err = this.asConnectionError(thrown);
         if (this.closed || !err.retryable || retry >= cfg.maxRetries) throw err;
         const delay = retryDelayMs(err, retry + 1);
         this.debug('connect failed; retrying', {
@@ -307,6 +306,19 @@ class Session {
       this.debug('connected', { connection: conn.id });
       return conn;
     }
+  }
+
+  /**
+   * Any failure while connecting becomes an SDK error that fails the waiting requests: an
+   * exception of any kind from the transport is an APIConnectionError, with the key scrubbed
+   * and only a sanitised copy of the original attached (BEHAVIOR.md §6.4, §8).
+   */
+  asConnectionError(err: unknown): BakbakError {
+    if (err instanceof BakbakError) return err;
+    const message = err instanceof Error ? err.message : String(err);
+    return new APIConnectionError(scrub(`WebSocket connection failed: ${message}`, this.cfg.apiKey), {
+      cause: safeCause(err, this.cfg.apiKey),
+    });
   }
 
   closedError(): WebSocketClosedError {

@@ -1,5 +1,12 @@
 import type { Config, RequestOptions } from './config';
-import { APIConnectionError, APITimeoutError, BakbakError, makeStatusError } from './errors';
+import {
+  APIConnectionError,
+  APITimeoutError,
+  BakbakError,
+  makeStatusError,
+  safeCause,
+  scrub,
+} from './errors';
 import { now, parseRetryAfter, retryDelayMs, setRetryAfter, startTimer } from './util';
 
 /**
@@ -75,15 +82,25 @@ function describe(err: unknown): string {
 
 /**
  * Turns whatever an attempt threw into what the caller should see: the caller's abort
- * reason, an `APITimeoutError`, an SDK error unchanged, or an `APIConnectionError`.
+ * reason, an `APITimeoutError`, an SDK error unchanged, or an `APIConnectionError`. Wrapped
+ * errors carry a sanitised copy of the original, never the original (it can hold headers).
  */
-export function toSDKError(err: unknown, attempt: Attempt, signal: AbortSignal | undefined): unknown {
+export function toSDKError(
+  err: unknown,
+  attempt: Attempt,
+  signal: AbortSignal | undefined,
+  key: string,
+): unknown {
   if (signal?.aborted) return signal.reason ?? err;
   if (attempt.timedOut) {
-    return new APITimeoutError(`No data from the API for ${attempt.timeoutMs} ms.`, { cause: err });
+    return new APITimeoutError(`No data from the API for ${attempt.timeoutMs} ms.`, {
+      cause: safeCause(err, key),
+    });
   }
   if (err instanceof BakbakError) return err;
-  return new APIConnectionError(`Connection error: ${describe(err)}`, { cause: err });
+  return new APIConnectionError(scrub(`Connection error: ${describe(err)}`, key), {
+    cause: safeCause(err, key),
+  });
 }
 
 /** Reads an error response into the matching `APIStatusError`, remembering `Retry-After`. */

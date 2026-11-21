@@ -1,5 +1,12 @@
 import type { Logger } from '../core/config';
-import { APIConnectionError, APITimeoutError, BakbakError, makeStatusError } from '../core/errors';
+import {
+  APIConnectionError,
+  APITimeoutError,
+  type BakbakError,
+  makeStatusError,
+  safeCause,
+  scrub,
+} from '../core/errors';
 import { importOptional, type RuntimeInfo } from '../core/runtime';
 import { finiteTimeout, parseRetryAfter, setRetryAfter, startTimer } from '../core/util';
 
@@ -134,12 +141,11 @@ function openWithWs(WS: WsCtor, o: OpenOptions, h: SocketHandlers): Promise<Sock
         o.logger?.debug?.('websocket: socket error', { error: err.message });
         return;
       }
+      const cause = safeCause(err, o.apiKey);
       fail(
         /handshake has timed out/i.test(err.message)
-          ? new APITimeoutError(`The WebSocket handshake took longer than ${o.connectTimeout} ms.`, {
-              cause: err,
-            })
-          : new APIConnectionError(`WebSocket connection failed: ${err.message}`, { cause: err }),
+          ? new APITimeoutError(`The WebSocket handshake took longer than ${o.connectTimeout} ms.`, { cause })
+          : new APIConnectionError(scrub(`WebSocket connection failed: ${err.message}`, o.apiKey), { cause }),
       );
     });
     ws.on('message', (data, isBinary) => {
@@ -225,12 +231,17 @@ export async function openSocket(o: OpenOptions, h: SocketHandlers): Promise<Soc
       o.logger?.debug?.('websocket: connecting with ws', { url: o.url });
       return openWithWs(WS, o, h);
     }
-    if (o.impl === 'ws') throw new BakbakError('webSocket: "ws" needs the ws package: npm install ws');
+    if (o.impl === 'ws') {
+      throw new APIConnectionError('webSocket: "ws" needs the ws package: npm install ws', {
+        retryable: false,
+      });
+    }
   }
   const Native = (globalThis as { WebSocket?: NativeCtor }).WebSocket;
   if (typeof Native !== 'function') {
-    throw new BakbakError(
+    throw new APIConnectionError(
       'This runtime has no WebSocket. On Node 20, install the ws package (npm install ws); Node 22+ has one built in.',
+      { retryable: false },
     );
   }
   return openWithGlobal(Native, o, h);

@@ -45,7 +45,7 @@ export class Voices {
         );
         return { voices, count: voices.length };
       } catch (thrown) {
-        const err = toSDKError(thrown, attempt, signal);
+        const err = toSDKError(thrown, attempt, signal, cfg.apiKey);
         attempt.dispose();
         if (!(await waitToRetry(cfg, err, retry, maxRetries, signal, 'voices.list'))) throw err;
       } finally {

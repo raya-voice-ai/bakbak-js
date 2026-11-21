@@ -356,3 +356,36 @@ export function interruptedBy(
     cause,
   });
 }
+
+/** Replaces every occurrence of the API key (raw or URL-encoded) in a text with `***`. */
+export function scrub(text: string, key: string | undefined): string {
+  if (!key) return text;
+  let out = text.split(key).join('***');
+  const encoded = encodeURIComponent(key);
+  if (encoded !== key) out = out.split(encoded).join('***');
+  return out;
+}
+
+/**
+ * A copy of a third-party error that is safe to attach as `cause` (BEHAVIOR.md §8): only its
+ * name, `code` and message (and, recursively, its own cause), with the API key scrubbed. Raw
+ * fetch, undici or ws errors can reference request headers, which would carry the key.
+ */
+export function safeCause(err: unknown, key: string | undefined, depth = 0): unknown {
+  if (err === undefined || err === null || err instanceof BakbakError) return err;
+  const source = err instanceof Error ? err : undefined;
+  const copy = new Error(scrub(source ? source.message : String(err), key));
+  copy.name = source?.name ?? 'Error';
+  copy.stack = scrub(source?.stack ?? `${copy.name}: ${copy.message}`, key);
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string' || typeof code === 'number') Object.assign(copy, { code });
+  const inner = (source as { cause?: unknown } | undefined)?.cause;
+  if (inner !== undefined && depth < 3) {
+    Object.defineProperty(copy, 'cause', {
+      value: safeCause(inner, key, depth + 1),
+      configurable: true,
+      writable: true,
+    });
+  }
+  return copy;
+}

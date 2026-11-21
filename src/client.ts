@@ -40,6 +40,13 @@ export class Bakbak {
         'No API key: pass apiKey to new Bakbak({ apiKey }) or set the BAKBAK_API_KEY environment variable.',
       );
     }
+    if (!/^[\x21-\x7e]+$/.test(apiKey)) {
+      // Said without echoing the key (BEHAVIOR.md §8). Such a key cannot go in a header anyway.
+      throw new BakbakError(
+        'The API key contains whitespace, control or non-ASCII characters (a stray newline, space or quote?). ' +
+          'It is not shown here; check the value passed as apiKey or set in BAKBAK_API_KEY.',
+      );
+    }
     const runtime = detectRuntime();
     if (runtime.browser && !options.dangerouslyAllowBrowser) {
       throw new BakbakError(

@@ -76,7 +76,7 @@ export class TTS {
         cfg.logger?.debug?.('generate: done', { requestId, bytes: data.length });
         return new Audio(data, metadata);
       } catch (thrown) {
-        const err = toSDKError(thrown, attempt, signal);
+        const err = toSDKError(thrown, attempt, signal, cfg.apiKey);
         attempt.dispose();
         attempt.controller.abort();
         // Audio has started: never retry (BEHAVIOR.md §4.1).
