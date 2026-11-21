@@ -104,7 +104,9 @@ class Ctx {
   readonly facade: WebSocketContext;
   /** Not yet on the wire, in order; requests held after a drain refusal come first. */
   pending: Req[] = [];
+  /** How many requests at the front of `pending` a draining connection refused, and which one. */
   heldCount = 0;
+  heldFrom: Conn | undefined;
   /** On the wire on `conn`, in order. */
   inflight: Req[] = [];
   conn: Conn | undefined;
@@ -279,7 +281,7 @@ class Session {
       if (!this.connecting && !this.reconnectWait && this.hasSendable()) quiet(this.ensureConnection());
       return;
     }
-    if (conn.draining) return; // Held until it closes (BEHAVIOR.md §6.4).
+    if (conn.draining) return; // A send failed: the socket is closing, and its close resends.
     for (const ctx of this.withPending) {
       while (ctx.pending.length) {
         const req = ctx.pending[0] as Req;
@@ -422,18 +424,27 @@ class Session {
     this.pump();
   }
 
-  /** A drain refusal: stop sending on this connection and resend the request after it closes. */
+  /**
+   * A drain refusal (BEHAVIOR.md §6.4): stop sending on this connection and open a new one for
+   * new work. The request is held, with any later ones of its context, and resent in order on
+   * the new connection as soon as its context has nothing unfinished on the draining one.
+   * None of this counts against maxRetries.
+   */
   hold(conn: Conn, ctx: Ctx, req: Req): void {
     if (!conn.draining) {
       conn.draining = true;
-      this.debug('connection is draining', { connection: conn.id });
+      this.debug('connection is draining; moving to a new one', { connection: conn.id });
       // It closes with 1001 once its accepted requests finish; never wait forever.
       conn.drainTimer = setTimeout(() => this.forceClose(conn, 1001), this.cfg.timeout);
+      if (this.current === conn) this.current = undefined;
+      quiet(this.ensureConnection());
     }
     this.detach(req);
     ctx.pending.splice(ctx.heldCount, 0, req);
     ctx.heldCount++;
+    ctx.heldFrom = conn;
     this.withPending.add(ctx);
+    this.pump();
   }
 
   notice(msg: Record<string, unknown>): void {
@@ -689,7 +700,12 @@ class Session {
     }
     conn.active.clear();
     conn.unfinished = 0;
-    if (conn.draining) for (const ctx of this.withPending) ctx.heldCount = 0;
+    for (const ctx of this.withPending) {
+      if (ctx.heldFrom === conn) {
+        ctx.heldCount = 0;
+        ctx.heldFrom = undefined;
+      }
+    }
 
     if (code === 1001 || conn.draining) {
       // Going away: reconnect at once and resend; this does not count as a retry.
@@ -824,18 +840,22 @@ export class WebSocketRequest {
   /**
    * This request's audio. Each chunk is delivered once: to this iterator or to
    * `ctx.events()`/`ctx.audio()`, whichever reads it first, so read a context one way.
-   * Throws the request's error if it failed.
+   * (Terminal events still reach `ctx.events()`.) Throws the request's error if it failed.
    */
   async *audio(): AsyncGenerator<Uint8Array, void, undefined> {
     const req = this.#r;
     for (;;) {
       while (req.rHead < req.recs.length) {
         const rec = req.recs[req.rHead++] as Rec;
+        const event = rec.event;
+        if (event.type !== 'chunk') {
+          // Terminal events stay visible to ctx.events(); only audio is delivered once.
+          if (event.type === 'failed') throw event.error;
+          return;
+        }
         if (rec.taken) continue;
         rec.taken = true;
-        if (rec.event.type === 'chunk') yield rec.event.audio;
-        else if (rec.event.type === 'failed') throw rec.event.error;
-        else return;
+        yield event.audio;
       }
       if (req.settled) {
         if (req.error) throw req.error;
