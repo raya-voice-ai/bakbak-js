@@ -66,6 +66,8 @@ export function parseRetryAfter(
   if (!value) return undefined;
   const text = value.trim();
   if (/^\d+(\.\d+)?$/.test(text)) return Math.min(Number.parseFloat(text) * 1000, MAX_RETRY_AFTER_MS);
+  // HTTP dates always name the day or month; this keeps Date.parse from accepting "-1".
+  if (!/[a-z]/i.test(text)) return undefined;
   const date = Date.parse(text);
   if (Number.isNaN(date)) return undefined;
   return Math.min(Math.max(0, date - now), MAX_RETRY_AFTER_MS);
