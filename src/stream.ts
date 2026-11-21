@@ -70,21 +70,21 @@ async function* sseChunks(
         attempt,
       );
       requestId = res.headers.get('x-request-id') ?? undefined;
-      const encoding =
-        res.headers.get('x-audio-format') ??
-        params.output_format?.encoding ??
-        (params.output_format ? undefined : 'pcm_f32le');
+      // Reported as the headers say, else as requested; without either it is unknown, not
+      // guessed (BEHAVIOR.md §1). The default stream is 32-bit float, so samples are kept
+      // whole as float32 either way.
+      const encoding = res.headers.get('x-audio-format') ?? params.output_format?.encoding;
       const rate = res.headers.get('x-audio-sample-rate');
       hooks.onResponse({
         requestId,
         encoding,
-        sampleRate: rate
-          ? Number(rate)
-          : (params.output_format?.sample_rate ?? (params.output_format ? undefined : 24000)),
+        sampleRate: rate ? Number(rate) : params.output_format?.sample_rate,
         contentType: encoding ? CONTENT_TYPES[encoding] : undefined,
       });
       cfg.logger?.debug?.('stream: response', { requestId, status: res.status });
-      const aligner = new SampleAligner(sampleBytes(encoding));
+      const aligner = new SampleAligner(
+        sampleBytes(encoding ?? (params.output_format ? undefined : 'pcm_f32le')),
+      );
       if (!res.body)
         throw new StreamInterruptedError('The stream had no body.', {
           retryable: true,

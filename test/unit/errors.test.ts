@@ -53,6 +53,17 @@ describe('error message rendering (BEHAVIOR.md §3.2)', () => {
     expect(renderMessage(mentioned, 422)).toBe('Invalid request: voice_id: Field required.');
   });
 
+  it('skips detail entries without a msg, and ignores trailing whitespace before the stop', () => {
+    const detail = [{ loc: ['body', 'speed'] }, { loc: ['body', 'voice_id'], msg: 'Field required' }, 7];
+    expect(renderMessage({ detail }, 422)).toBe('voice_id: Field required');
+    expect(renderMessage({ message: 'Invalid request.  ', detail }, 422)).toBe(
+      'Invalid request. voice_id: Field required',
+    );
+    expect(renderMessage({ message: 'Invalid request ', detail }, 422)).toBe(
+      'Invalid request: voice_id: Field required',
+    );
+  });
+
   it('falls back to error, then the reason phrase, then HTTP <status>', () => {
     expect(renderMessage({ error: 'Too many' }, 429, 'Too Many Requests')).toBe('Too many');
     expect(renderMessage({}, 418, "I'm a teapot")).toBe("I'm a teapot");

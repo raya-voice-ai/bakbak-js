@@ -384,6 +384,21 @@ describe('AudioStream', () => {
     expect(total).toBe(16);
   });
 
+  it('reports encoding and sample rate as unknown without X-Audio headers, still keeping float samples whole', async () => {
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }); // no output_format: no X-Audio-*
+      res.end(sse([chunk(bytes.slice(0, 3)), chunk(bytes.slice(3)), DONE]));
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    const stream = client.tts.stream(PARAMS);
+    const sizes: number[] = [];
+    for await (const c of stream) sizes.push(c.audio.length);
+    expect(sizes).toEqual([16]); // 3 + 13 bytes: one whole run of four float32 samples
+    expect(stream.encoding).toBeUndefined();
+    expect(stream.sampleRate).toBeUndefined();
+    expect(stream.contentType).toBeUndefined();
+  });
+
   it('exposes the request id and metadata, and can be read only once', async () => {
     const server = await f32Server();
     const client = new Bakbak({ apiKey: 'k', baseURL: server.url });

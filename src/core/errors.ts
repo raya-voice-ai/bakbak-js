@@ -232,6 +232,7 @@ function renderDetail(entry: unknown): string {
   if (typeof entry === 'string') return entry;
   if (!isObject(entry)) return '';
   const msg = typeof entry.msg === 'string' ? entry.msg : '';
+  if (!msg) return ''; // an entry with no msg is skipped (BEHAVIOR.md §3.2)
   const loc = Array.isArray(entry.loc)
     ? entry.loc
         .filter((part, i) => !(i === 0 && part === 'body'))
@@ -255,7 +256,8 @@ export function renderMessage(body: unknown, status?: number, reason?: string): 
       // A generic message (the WebSocket's "The request is malformed or invalid.") would hide
       // which field is wrong: add the validation list unless the message already has it.
       if (!fields || message.includes(fields)) return message;
-      return `${message}${/[.!?]$/.test(message) ? '' : ':'} ${fields}`;
+      const base = message.trimEnd(); // trailing whitespace does not hide a final stop
+      return `${base}${/[.!?]$/.test(base) ? '' : ':'} ${fields}`;
     }
     if (typeof detail === 'string' && detail) return detail;
     if (fields) return fields;
