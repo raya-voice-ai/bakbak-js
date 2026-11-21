@@ -389,3 +389,21 @@ export function safeCause(err: unknown, key: string | undefined, depth = 0): unk
   }
   return copy;
 }
+
+/**
+ * A redirect the SDK did not follow (BEHAVIOR.md §8): following one would send the API key,
+ * a custom header that fetch and some WebSocket libraries keep on cross-origin hops, to
+ * another origin. `status` is undefined for a browser's opaque redirect, which hides it.
+ */
+export function redirectError(
+  status: number | undefined,
+  location: string | null | undefined,
+  requestId: string | null | undefined,
+): APIStatusError {
+  const where = location ? ` to ${location}` : '';
+  return new APIStatusError(
+    `The API answered with a redirect${status ? ` (${status})` : ''}${where}, which the SDK never follows: it ` +
+      'would send your API key to another address. Check baseURL.',
+    { status, retryable: false, requestId: requestId || undefined },
+  );
+}

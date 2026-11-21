@@ -4,6 +4,7 @@ import {
   APITimeoutError,
   BakbakError,
   makeStatusError,
+  redirectError,
   safeCause,
   scrub,
 } from './errors';
@@ -145,8 +146,18 @@ export async function fetchOk(
     headers,
     body: endpoint.body,
     signal: attempt.signal,
+    // Never follow a redirect: fetch would carry X-API-Key to the other origin (BEHAVIOR.md §8).
+    redirect: 'manual',
   });
   attempt.touch();
+  if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+    await res.body?.cancel().catch(() => {});
+    throw redirectError(
+      res.status || undefined,
+      res.headers.get('location'),
+      res.headers.get('x-request-id'),
+    );
+  }
   if (!res.ok) throw await errorFromResponse(res);
   return res;
 }

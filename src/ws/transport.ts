@@ -4,6 +4,7 @@ import {
   APITimeoutError,
   type BakbakError,
   makeStatusError,
+  redirectError,
   safeCause,
   scrub,
 } from '../core/errors';
@@ -87,7 +88,9 @@ function upgradeError(res: UpgradeResponse, text: string): BakbakError {
     const value = res.headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
-  const err = makeStatusError(res.statusCode ?? 0, body, header('x-request-id'), res.statusMessage);
+  const status = res.statusCode ?? 0;
+  if (status >= 300 && status < 400) return redirectError(status, header('location'), header('x-request-id'));
+  const err = makeStatusError(status, body, header('x-request-id'), res.statusMessage);
   return setRetryAfter(err, parseRetryAfter(header('retry-after')));
 }
 
@@ -102,6 +105,8 @@ function openWithWs(WS: WsCtor, o: OpenOptions, h: SocketHandlers): Promise<Sock
     const ws = new WS(o.url, {
       headers: o.headers,
       perMessageDeflate: false,
+      // Never follow a redirect: ws would resend X-API-Key to the other origin (BEHAVIOR.md §8).
+      followRedirects: false,
       handshakeTimeout: finiteTimeout(o.connectTimeout) ? o.connectTimeout : undefined,
       maxPayload: 64 * 1024 * 1024,
     });
