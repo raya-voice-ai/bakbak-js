@@ -262,6 +262,19 @@ function wrapCut(t: CodePoints, start: number, maxChars: number): number {
   return cut > start + 1 ? cut : windowEnd;
 }
 
+/**
+ * How much text before the group start a streaming segmenter must keep. Two decisions look
+ * behind the group start: the word before a "." (which, after a hard cut, began before the
+ * group) and whether a list marker starts a line. Keeping the word the group starts in, the
+ * spaces or tabs before it and one more character answers both as the whole text would.
+ */
+function keepFrom(t: CodePoints, gs: number): number {
+  let i = gs;
+  while (i > 0 && isWordChar(t[i - 1] as string)) i--;
+  while (i > 0 && (t[i - 1] === ' ' || t[i - 1] === '\t')) i--;
+  return i > 0 ? i - 1 : 0;
+}
+
 function resolveOptions(options: SegmenterOptions = {}): Required<SegmenterOptions> {
   const o = {
     minChars: options.minChars ?? 20,
@@ -284,6 +297,8 @@ function resolveOptions(options: SegmenterOptions = {}): Required<SegmenterOptio
 export class Segmenter {
   #o: Required<SegmenterOptions>;
   #buf: CodePoints = [];
+  /** Where the current group starts in #buf; what comes before it is look-behind only. */
+  #gs = 0;
   #first = true;
   /** Inside a wrapped group: no merging until it ends. */
   #wrapping = false;
@@ -302,6 +317,7 @@ export class Segmenter {
   flush(): string[] {
     const out = this.#drain(true);
     this.#buf = [];
+    this.#gs = 0;
     this.#first = true;
     this.#wrapping = false;
     return out;
@@ -320,7 +336,7 @@ export class Segmenter {
     const o = this.#o;
     const out: string[] = [];
     const t = this.#buf;
-    let gs = skipWs(t, 0); // group start
+    let gs = skipWs(t, this.#gs); // group start
     for (;;) {
       const clause: [number, number] | undefined =
         o.eagerFirstClause && this.#first ? [gs, o.firstClauseMinChars] : undefined;
@@ -364,7 +380,9 @@ export class Segmenter {
       }
       break;
     }
-    this.#buf = gs ? t.slice(gs) : t;
+    const keep = keepFrom(t, gs);
+    this.#buf = keep ? t.slice(keep) : t;
+    this.#gs = gs - keep;
     return out;
   }
 }
