@@ -306,28 +306,31 @@ function wrapCut(t: CodePoints, start: number, maxChars: number): number {
 }
 
 /**
- * The look-behind only asks whether the word before a "." is one of these short words (or a
- * single letter, or 1-3 digits). A word longer than the longest of them answers "no" however
- * much of it is kept, so keeping this many of its code points is enough.
+ * The longest word any rule compares (TITLES, AMBIGUOUS, list-marker digits) has 6 code
+ * points, so 8 code points of a word are enough to know it is none of them.
  */
-const LOOKBEHIND_WORD = Math.max(...[...TITLES, ...AMBIGUOUS].map((w) => Array.from(w).length)) + 2;
+const LOOKBEHIND_WORD = 8;
 
 /**
- * How much text before the group start a streaming segmenter must keep (the reference's
- * `_keep_from`). Two decisions look behind the group start: the word before a "." (which,
- * after a hard cut, began before the group) and whether a list marker starts a line. Keeping
- * the word the group starts in, the spaces or tabs before it and one more character answers
- * both as the whole text would. Of a long word only LOOKBEHIND_WORD code points are kept, so
- * text without spaces does not pile up in the buffer.
+ * The text a streaming segmenter keeps before the group start (the reference's
+ * `_lookbehind`). Two decisions look behind the group start: the word before a "." (which,
+ * after a hard cut, began before the group) and whether a list marker sits at the start of a
+ * line. They need only the last few characters of that word and, when the word is short,
+ * what precedes it: a run of spaces or tabs (one stands for any number) and the character
+ * before the run, or nothing at the start of the text. Keeping exactly that bounds the buffer
+ * however long the text is. The kept text is never emitted, so it need not be a slice.
  */
-function keepFrom(t: CodePoints, gs: number): number {
-  let i = gs;
-  while (i > 0 && isWordChar(t[i - 1] as string)) {
-    if (gs - i >= LOOKBEHIND_WORD) return i; // long enough to match nothing; no line start needed
-    i--;
-  }
+function lookbehind(t: CodePoints, gs: number): CodePoints {
+  let w = gs;
+  while (w > 0 && isWordChar(t[w - 1] as string)) w--;
+  if (gs - w >= LOOKBEHIND_WORD) return t.slice(gs - LOOKBEHIND_WORD, gs);
+  let i = w;
   while (i > 0 && (t[i - 1] === ' ' || t[i - 1] === '\t')) i--;
-  return i > 0 ? i - 1 : 0;
+  const context: CodePoints = [];
+  if (i > 0) context.push(t[i - 1] as string);
+  if (i < w) context.push(' ');
+  for (let k = w; k < gs; k++) context.push(t[k] as string);
+  return context;
 }
 
 function resolveOptions(options: SegmenterOptions = {}): Required<SegmenterOptions> {
@@ -355,6 +358,8 @@ export class Segmenter {
   /** A high surrogate that ended the last push: its pair comes with the next one. */
   #high = '';
   #memo = freshMemo();
+  /** [lo, hi]: t[lo:hi] is all whitespace (hi: the first non-whitespace, or the end then). */
+  #ws: [number, number] = [-1, -1];
   /** Where the current group starts in #buf; what comes before it is look-behind only. */
   #gs = 0;
   #first = true;
@@ -388,6 +393,7 @@ export class Segmenter {
     const out = this.#drain(true);
     this.#buf = [];
     this.#memo = freshMemo();
+    this.#ws = [-1, -1];
     this.#gs = 0;
     this.#first = true;
     this.#wrapping = false;
@@ -436,7 +442,7 @@ export class Segmenter {
       const limit = gs + o.maxChars;
       // The stripped rest is longer than maxChars exactly when something other than
       // whitespace lies at or beyond `limit` (gs is not whitespace).
-      const longRest = skipWs(t, limit) < t.length;
+      const longRest = this.#skipWs(t, limit) < t.length;
       if (longRest && (final || firstOpen === undefined || firstOpen > limit)) {
         const cut = wrapCut(t, gs, o.maxChars);
         const [a, b] = strip(t, gs, cut);
@@ -452,19 +458,34 @@ export class Segmenter {
       }
       break;
     }
-    const keep = keepFrom(t, gs);
-    this.#buf = keep ? t.slice(keep) : t;
-    this.#gs = gs - keep;
-    for (const m of this.#memo) {
-      // The trimmed text shifts left; a region that falls off the front is forgotten.
-      m[0] = Math.max(0, m[0] - keep);
-      m[1] -= keep;
-      if (m[1] < 0) {
+    // Nothing emitted and no whitespace skipped: the buffer and its look-behind are unchanged,
+    // so leave them be (copying them on every push would make long groups quadratic).
+    if (gs === this.#gs) return out;
+    const context = lookbehind(t, gs);
+    this.#buf = context.concat(t.slice(gs));
+    this.#gs = context.length;
+    const shift = gs - context.length;
+    for (const m of [...this.#memo, this.#ws]) {
+      // Text from the group start on moves by `shift`; the memos never cover the context.
+      m[0] = Math.max(context.length, m[0] - shift);
+      m[1] -= shift;
+      if (m[1] < context.length) {
         m[0] = -1;
         m[1] = -1;
       }
     }
     return out;
+  }
+
+  /** skipWs, remembering the whitespace run it crossed: a growing run is scanned only once. */
+  #skipWs(t: CodePoints, i: number): number {
+    const m = this.#ws;
+    const known = m[0] <= i && i <= m[1];
+    let j = known ? m[1] : i;
+    while (j < t.length && WHITESPACE.has(t[j] as string)) j++;
+    if (!known) m[0] = i;
+    m[1] = j;
+    return j;
   }
 }
 

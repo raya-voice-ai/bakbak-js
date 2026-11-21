@@ -167,6 +167,7 @@ describe('segmenter: linear time (BEHAVIOR.md §7)', () => {
     ['punctuated', 'यह एक छोटा सा वाक्य है जो परीक्षण के लिए है। '.repeat(4400)],
     ['no punctuation', 'शब्द '.repeat(40_000)],
     ['no punctuation or spaces', 'क'.repeat(200_000)],
+    ['long runs of spaces and tabs', `क${' \t'.repeat(1_000)}`.repeat(100)],
   ];
   for (const [name, text] of inputs) {
     it(`splits 200k characters (${name}) in well under a second, whole or streamed`, () => {
