@@ -45,9 +45,9 @@ async function mock(onMessage: (peer: Peer, msg: Record<string, unknown>) => voi
       onMessage(peer, msg);
     });
   });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(0, 'localhost', r));
   const m: Mock = {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: `http://localhost:${(server.address() as AddressInfo).port}`,
     peers,
     close: async () => {
       for (const c of wss.clients) c.terminate();

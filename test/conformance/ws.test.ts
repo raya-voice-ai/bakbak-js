@@ -176,10 +176,10 @@ async function startServer(connections: Connection[]): Promise<MockWsServer> {
       state.scripts.push(runScript(ws, n, spec.script, state.problems));
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, 'localhost', resolve));
   const { port } = server.address() as AddressInfo;
   return {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL: `http://localhost:${port}`,
     get connections() {
       return state.connections;
     },

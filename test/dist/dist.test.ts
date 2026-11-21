@@ -122,11 +122,11 @@ describe('dist', () => {
         ws.send(JSON.stringify({ type: 'done', done: true, ...base }));
       });
     });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    await new Promise<void>((r) => server.listen(0, 'localhost', r));
     try {
       const client = new cjs.Bakbak({
         apiKey: 'k',
-        baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        baseURL: `http://localhost:${(server.address() as AddressInfo).port}`,
         webSocket: 'ws',
       });
       const ws = client.tts.websocket({ voice_id: 'v', language: 'hi' });

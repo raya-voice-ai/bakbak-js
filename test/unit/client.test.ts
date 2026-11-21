@@ -44,9 +44,9 @@ async function serve(handler: Handler): Promise<Server> {
     });
   });
   server.on('connection', () => sockets++);
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(0, 'localhost', r));
   const s: Server = {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: `http://localhost:${(server.address() as AddressInfo).port}`,
     requests,
     get sockets() {
       return sockets;

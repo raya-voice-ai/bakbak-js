@@ -1,7 +1,7 @@
 // Runtime smoke test of the built ESM package: run it with Node, Bun or Deno against
 // scripts/smoke-server.mjs.
-//   node|bun scripts/smoke-runtime.mjs http://127.0.0.1:<port>
-//   deno run --allow-net --allow-env --allow-read --allow-write scripts/smoke-runtime.mjs http://127.0.0.1:<port>
+//   node|bun scripts/smoke-runtime.mjs http://localhost:<port>
+//   deno run --allow-net --allow-env --allow-read --allow-write scripts/smoke-runtime.mjs http://localhost:<port>
 import * as sdk from '../dist/index.js';
 
 const baseURL = globalThis.Deno ? globalThis.Deno.args[0] : globalThis.process.argv[2];

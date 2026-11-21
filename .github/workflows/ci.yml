@@ -96,9 +96,9 @@ jobs:
           for _ in $(seq 50); do grep -q PORT= server.log && break; sleep 0.1; done
           PORT=$(grep -o 'PORT=[0-9]*' server.log | cut -d= -f2)
           if [ "${{ matrix.runtime }}" = bun ]; then
-            bun scripts/smoke-runtime.mjs "http://127.0.0.1:$PORT"
+            bun scripts/smoke-runtime.mjs "http://localhost:$PORT"
           else
-            deno run --allow-net --allow-env --allow-read --allow-write scripts/smoke-runtime.mjs "http://127.0.0.1:$PORT"
+            deno run --allow-net --allow-env --allow-read --allow-write scripts/smoke-runtime.mjs "http://localhost:$PORT"
           fi
 
   live:
