@@ -32,7 +32,8 @@ await audio.save('hello.wav'); // Node, Bun and Deno
 ```
 
 Request fields keep the API's own names (`voice_id`, `output_format`, `sample_rate`), so
-code, curl commands and the API reference read the same.
+code, curl commands and the [API reference](https://docs.litwizlabs.com/api-reference/tts-websocket)
+read the same. Full documentation: [the JavaScript SDK guide](https://docs.litwizlabs.com/documentation/sdk-javascript).
 
 ## Contents
 
@@ -93,6 +94,10 @@ for await (const chunk of stream) {
 console.log(await stream.requestId, stream.encoding, stream.sampleRate);
 ```
 
+`encoding` and `sampleRate` come from the response headers, which the API sends when the
+request has an `output_format`; without one they are `undefined` (the default stream is
+32-bit float PCM at 24 kHz).
+
 An `AudioStream` can be read once, in whichever way suits you:
 
 ```ts
@@ -136,7 +141,11 @@ context. Read a context in one of these ways:
 - The request returned by `send()` has `result()` (a promise of
   `{ requestId, audioBytes, cancelled }`, rejected if it failed) and its own `audio()`.
 
-Iteration ends after `endInput()`, once every request has finished.
+Each event is delivered once, to whichever reader takes it first, and its audio is released
+as soon as it is taken, so pick one way per context. Iteration ends after `endInput()`, once
+every request has finished. A context with nothing unfinished holds no resources in the
+handle, so a long-lived context (one per caller) and a context per utterance both work for
+as long as the connection lives.
 
 ### Speaking an LLM's reply as it is written
 
@@ -163,8 +172,11 @@ await ctx.cancel();
 ```
 
 `cancel()` stops the running request and drops the queued ones; each ends as `cancelled`.
-Audio that arrived but was not read yet is discarded too, so the context goes silent at once.
-It resolves when the API acknowledges, and the context stays usable: send the next turn on it.
+All of the context's audio that arrived but was not read yet is discarded too, including that
+of requests that had already finished, so the context goes silent at once. A `sendStream()`
+feeding the context stops: it sends nothing more, lets go of its token source and returns
+(calling `endInput()`, as when its tokens end, unless you passed `endInput: false`).
+`cancel()` resolves when the API acknowledges; the context then stays usable for `send()`.
 
 ### Telephony
 
@@ -185,7 +197,10 @@ The WebSocket opens on `connect()` or the first `send()`. It answers the server'
 waits instead of exceeding the server's per-connection limits (64 unfinished requests, 16
 contexts generating at once), reconnects and resends when the server restarts or drains,
 and fails a request with `StreamInterruptedError` if the connection breaks after its audio
-began. Messages about no request at all go to `ws.onNotice`:
+began. When a server drains, the SDK moves to a new connection at once and resends what was
+refused, without counting it as a retry; a request refused again backs off and counts. A
+chunk with invalid audio data fails its own request only. Messages about no request at all
+go to `ws.onNotice`:
 
 ```ts
 ws.onNotice = (error) => console.warn('websocket notice:', error.message);
@@ -253,19 +268,19 @@ const client = new Bakbak({
 });
 ```
 
-| Option                    | Default                                           | Meaning                                                                                                                                                                    |
-| ------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiKey`                  | `BAKBAK_API_KEY`                                  | Your API key. Without one the constructor throws.                                                                                                                          |
-| `baseURL`                 | `BAKBAK_BASE_URL`, then `https://hub.getraya.app` | The API's base URL. The WebSocket URL is derived from it.                                                                                                                  |
-| `timeout`                 | 60 000 ms                                         | Read timeout: the longest wait for the next bytes of a response, or the next message of a WebSocket context with unfinished requests. It includes the time to first audio. |
-| `connectTimeout`          | 5 000 ms                                          | WebSocket connect timeout (TCP, TLS and upgrade).                                                                                                                          |
-| `maxRetries`              | 2                                                 | Retries of a failure before any audio.                                                                                                                                     |
-| `defaultHeaders`          | none                                              | Headers sent with every request.                                                                                                                                           |
-| `fetch`                   | global `fetch`                                    | A `fetch` implementation (proxies, tests).                                                                                                                                 |
-| `webSocket`               | `'auto'`                                          | `'auto'`, `'ws'` or `'global'`; see [Runtimes](#runtimes-and-browsers).                                                                                                    |
-| `logger`                  | none                                              | `{ debug?, info?, warn?, error? }`. The SDK logs nothing by default, and never logs the API key or synthesis text.                                                         |
-| `sleep`                   | `setTimeout`                                      | The wait between retries; replace it in tests.                                                                                                                             |
-| `dangerouslyAllowBrowser` | false                                             | See [browsers](#runtimes-and-browsers).                                                                                                                                    |
+| Option                    | Default                                           | Meaning                                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`                  | `BAKBAK_API_KEY`                                  | Your API key. Without one the constructor throws.                                                                                                                                                   |
+| `baseURL`                 | `BAKBAK_BASE_URL`, then `https://hub.getraya.app` | The API's base URL. The WebSocket URL is derived from it.                                                                                                                                           |
+| `timeout`                 | 60 000 ms                                         | Read timeout: the longest wait for the next bytes of a response, or the next message of a WebSocket context with unfinished requests. It includes the time to first audio. `Infinity` turns it off. |
+| `connectTimeout`          | 5 000 ms                                          | WebSocket connect timeout (TCP, TLS and upgrade).                                                                                                                                                   |
+| `maxRetries`              | 2                                                 | Retries of a failure before any audio.                                                                                                                                                              |
+| `defaultHeaders`          | none                                              | Headers sent with every request.                                                                                                                                                                    |
+| `fetch`                   | global `fetch`                                    | A `fetch` implementation (proxies, tests).                                                                                                                                                          |
+| `webSocket`               | `'auto'`                                          | `'auto'`, `'ws'` or `'global'`; see [Runtimes](#runtimes-and-browsers).                                                                                                                             |
+| `logger`                  | none                                              | `{ debug?, info?, warn?, error? }`. The SDK logs nothing by default, and never logs the API key or synthesis text.                                                                                  |
+| `sleep`                   | `setTimeout`                                      | The wait between retries; replace it in tests.                                                                                                                                                      |
+| `dangerouslyAllowBrowser` | false                                             | See [browsers](#runtimes-and-browsers).                                                                                                                                                             |
 
 Every method takes per-call options as its last argument:
 
@@ -323,6 +338,12 @@ try {
 ```
 
 `instanceof` works even if your application loads both the ESM and the CommonJS build.
+Every error code and what to do about it: [TTS errors](https://docs.litwizlabs.com/documentation/tts-errors).
+
+The API key never appears in an error, its causes, or a log line. A key that is empty or
+contains whitespace or control characters is refused when the client is created. The SDK
+never follows a redirect, on HTTP or the WebSocket handshake, because that would send the
+key to another address: a 3xx surfaces as an `APIStatusError` with its status.
 
 ## Retries and timeouts
 
@@ -389,6 +410,9 @@ Runnable with `npx tsx` (set `BAKBAK_API_KEY`; `BAKBAK_BASE_URL` is optional):
 
 ## Learn more
 
+- [JavaScript SDK guide](https://docs.litwizlabs.com/documentation/sdk-javascript).
+- [WebSocket API reference](https://docs.litwizlabs.com/api-reference/tts-websocket).
+- [TTS errors](https://docs.litwizlabs.com/documentation/tts-errors).
 - [`conformance/BEHAVIOR.md`](conformance/BEHAVIOR.md): the behaviour every official Bakbak
   client follows (Python, JavaScript, the MCP server and the LiveKit plugin).
 - [Python SDK](https://github.com/raya-voice-ai/bakbak-python).
