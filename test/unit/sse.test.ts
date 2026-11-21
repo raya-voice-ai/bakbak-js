@@ -71,3 +71,22 @@ describe('SSE parsing (BEHAVIOR.md §5.1)', () => {
     expect(reads).toBe(3);
   });
 });
+
+describe('SSE parsing: huge lines', () => {
+  it('parses a 16 MiB data line in 16 KiB reads in linear time', async () => {
+    const size = 16 * 1024 * 1024;
+    const body = new TextEncoder().encode(`data: ${'A'.repeat(size)}\n\ndata: next\n\n`);
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < body.length; i += 16_384) c.enqueue(body.subarray(i, i + 16_384));
+        c.close();
+      },
+    });
+    const started = performance.now();
+    const out: SSEEvent[] = [];
+    for await (const ev of parseSSE(stream, () => {})) out.push(ev);
+    expect(out[0]?.data.length).toBe(size);
+    expect(out[1]?.data).toBe('next');
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});

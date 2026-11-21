@@ -20,8 +20,10 @@ export async function* parseSSE(
 ): AsyncGenerator<SSEEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buf = '';
-  let scanFrom = 0;
+  // The current incomplete line, as pieces: joined only once its newline arrives, so a huge
+  // line (one chunk's base64) costs linear time however many reads it spans.
+  let pending: string[] = [];
+  let pendingLength = 0;
   let eventName = '';
   let data: string[] = [];
   try {
@@ -29,12 +31,18 @@ export async function* parseSSE(
       const { value, done } = await reader.read();
       if (done) break;
       onRead();
-      buf += decoder.decode(value, { stream: true });
-      let lineStart = 0;
-      for (let nl = buf.indexOf('\n', scanFrom); nl !== -1; nl = buf.indexOf('\n', lineStart)) {
-        const end = nl > lineStart && buf.charCodeAt(nl - 1) === 13 ? nl - 1 : nl;
-        const line = buf.slice(lineStart, end);
-        lineStart = nl + 1;
+      const text = decoder.decode(value, { stream: true });
+      let start = 0;
+      for (let nl = text.indexOf('\n'); nl !== -1; nl = text.indexOf('\n', start)) {
+        let line = text.slice(start, nl);
+        start = nl + 1;
+        if (pending.length) {
+          pending.push(line);
+          line = pending.join('');
+          pending = [];
+          pendingLength = 0;
+        }
+        if (line.charCodeAt(line.length - 1) === 13) line = line.slice(0, -1); // CRLF
         if (line === '') {
           if (data.length) {
             yield { event: eventName, data: data.length === 1 ? (data[0] as string) : data.join('\n') };
@@ -52,18 +60,20 @@ export async function* parseSSE(
         else if (field === 'event') eventName = fieldValue;
         // id, retry and unknown fields are ignored.
       }
-      buf = lineStart ? buf.slice(lineStart) : buf;
-      scanFrom = buf.length;
-      if (buf.length > MAX_LINE_CHARS) {
-        throw new APIConnectionError(`An event line exceeded ${MAX_LINE_CHARS} characters.`, {
-          retryable: false,
-        });
+      if (start < text.length) {
+        pending.push(start ? text.slice(start) : text);
+        pendingLength += text.length - start;
+        if (pendingLength > MAX_LINE_CHARS) {
+          throw new APIConnectionError(`An event line exceeded ${MAX_LINE_CHARS} characters.`, {
+            retryable: false,
+          });
+        }
       }
     }
     // A complete final event whose blank line never came is still dispatched.
-    buf += decoder.decode();
-    if (buf.endsWith('\r')) buf = buf.slice(0, -1);
-    if (buf === '' && data.length) yield { event: eventName, data: data.join('\n') };
+    let tail = pending.join('') + decoder.decode();
+    if (tail.endsWith('\r')) tail = tail.slice(0, -1);
+    if (tail === '' && data.length) yield { event: eventName, data: data.join('\n') };
   } finally {
     reader.releaseLock();
   }
