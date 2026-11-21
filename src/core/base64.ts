@@ -23,28 +23,49 @@ function decodedLength(b64: string): number {
   return Math.floor((b64.length * 3) / 4) - pad;
 }
 
+/** A chunk's `data` that is not valid base64 (BEHAVIOR.md §6.4: it fails its request). */
+export class InvalidBase64Error extends Error {
+  constructor() {
+    super("A chunk's audio data was not valid base64.");
+    this.name = 'InvalidBase64Error';
+  }
+}
+
 /**
  * Decodes base64 once into a fresh `Uint8Array` that starts at offset 0 of its own
  * `ArrayBuffer` (safe to wrap in `Int16Array`/`Float32Array`), optionally after `prefix`.
  */
 export function decodeBase64(b64: string, prefix?: Uint8Array): Uint8Array {
   const pre = prefix?.length ?? 0;
+  if (b64.length % 4 === 1) throw new InvalidBase64Error();
   if (NodeBuffer) {
-    const size = pre + decodedLength(b64);
-    const buf = NodeBuffer.allocUnsafeSlow(size);
+    const expected = decodedLength(b64);
+    const buf = NodeBuffer.allocUnsafeSlow(pre + expected);
     if (prefix && pre) buf.set(prefix, 0);
+    // Node skips characters that are not base64, so a short write means invalid input.
     const written = buf.write(b64, pre, 'base64');
+    if (written !== expected) throw new InvalidBase64Error();
     return new Uint8Array(buf.buffer, 0, pre + written);
   }
   if (fromBase64) {
-    const bytes = fromBase64(b64);
+    let bytes: Uint8Array;
+    try {
+      bytes = fromBase64(b64);
+    } catch {
+      throw new InvalidBase64Error();
+    }
     if (!pre) return bytes;
     const out = new Uint8Array(pre + bytes.length);
     out.set(prefix as Uint8Array, 0);
     out.set(bytes, pre);
     return out;
   }
-  const binary = atob(b64);
+  let binary: string;
+  try {
+    binary = atob(b64);
+  } catch {
+    throw new InvalidBase64Error();
+  }
   const out = new Uint8Array(pre + binary.length);
   if (prefix && pre) out.set(prefix, 0);
   for (let i = 0; i < binary.length; i++) out[pre + i] = binary.charCodeAt(i);

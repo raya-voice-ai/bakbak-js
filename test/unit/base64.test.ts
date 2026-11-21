@@ -48,3 +48,14 @@ describe('SampleAligner', () => {
     expect(a.buffer.byteLength).toBe(2);
   });
 });
+
+describe('invalid base64', () => {
+  it('is refused, not silently shortened', async () => {
+    const { InvalidBase64Error } = await import('../../src/core/base64');
+    for (const bad of ['A*A=', 'AAAAA', 'AA A', '!!!!', 'AAAA====']) {
+      expect(() => decodeBase64(bad), bad).toThrow(InvalidBase64Error);
+    }
+    expect([...decodeBase64('AQID')]).toEqual([1, 2, 3]);
+    expect([...decodeBase64('AQI')]).toEqual([1, 2]); // unpadded is fine
+  });
+});

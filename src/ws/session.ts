@@ -116,6 +116,8 @@ class Req {
   error: BakbakError | undefined;
   conn: Conn | undefined;
   retries = 0;
+  /** Failed locally while the server still sends it: drop its messages until its end. */
+  broken = false;
   /** Draining refusals of this request; only the first one is free (BEHAVIOR.md §6.4). */
   drainRefusals = 0;
   backoff = false;
@@ -439,11 +441,25 @@ class Session {
     if (!req) return;
     // Each attempt has its own id; the latest one is the request's.
     if (typeof msg.request_id === 'string') req.requestId = msg.request_id;
+    if (req.broken) {
+      // Already failed here; keep its place until the server ends it, so routing stays right.
+      if (msg.type === 'done' || msg.type === 'error') {
+        this.release(req);
+        this.pump();
+      }
+      return;
+    }
     switch (msg.type) {
       case 'chunk': {
         if (typeof msg.data !== 'string') return;
+        let audio: Uint8Array | undefined;
+        try {
+          audio = req.aligner.push(msg.data);
+        } catch {
+          this.breakRequest(req);
+          return;
+        }
         req.hadAudio = true;
-        const audio = req.aligner.push(msg.data);
         if (audio) this.deliver(req, audio, typeof msg.step_time === 'number' ? msg.step_time : undefined);
         return;
       }
@@ -462,6 +478,29 @@ class Session {
         // `cancelled` without a cancel, and unknown types, are ignored (forward compatibility).
         return;
     }
+  }
+
+  /**
+   * A chunk that is not valid base64 fails its own request as the stream breaking there
+   * (BEHAVIOR.md §6.4), never the connection. The request stays in place, its later messages
+   * dropped, until the server's done or error.
+   */
+  breakRequest(req: Req): void {
+    req.broken = true;
+    const error = req.hadAudio
+      ? new StreamInterruptedError(
+          `A chunk's audio data was not valid base64, after ${req.audioBytes} bytes of audio.`,
+          {
+            retryable: true,
+            requestId: req.requestId,
+            audioBytes: req.audioBytes,
+          },
+        )
+      : new APIConnectionError("A chunk's audio data was not valid base64.", {
+          retryable: true,
+          requestId: req.requestId,
+        });
+    this.settle(req, { type: 'failed', error });
   }
 
   onRequestError(conn: Conn, ctx: Ctx, req: Req, msg: Record<string, unknown>): void {

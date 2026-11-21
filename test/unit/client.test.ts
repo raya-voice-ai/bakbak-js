@@ -304,6 +304,37 @@ describe('read timeout: an inactivity timer between chunks', () => {
   });
 });
 
+describe('a chunk that is not valid base64 (BEHAVIOR.md §6.4)', () => {
+  const bad = { type: 'chunk', status_code: 206, done: false, data: 'not*base64!' };
+
+  it('before any audio: the stream broke, so it is retried', async () => {
+    let n = 0;
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(n++ === 0 ? sse([bad, DONE]) : sse([chunk([1, 2]), DONE]));
+    });
+    const sleeps: number[] = [];
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url, sleep: recordingSleep(sleeps) });
+    expect([...(await client.tts.stream(PARAMS).bytes())]).toEqual([1, 2]);
+    expect(sleeps).toHaveLength(1);
+  });
+
+  it('after audio: StreamInterruptedError, not retried', async () => {
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'req_b' });
+      res.end(sse([chunk([1, 2, 3, 4]), bad, chunk([5, 6, 7, 8]), DONE]));
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    const err = await client.tts
+      .stream({ ...PARAMS, output_format: { container: 'raw', encoding: 'pcm_s16le' } })
+      .bytes()
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StreamInterruptedError);
+    expect(err).toMatchObject({ audioBytes: 4, requestId: 'req_b', retryable: true });
+    expect(server.requests.length).toBe(1);
+  });
+});
+
 describe('AudioStream', () => {
   const f32 = new Float32Array([0.5, -0.5, 0.25, 1]);
   const bytes = [...new Uint8Array(f32.buffer)];

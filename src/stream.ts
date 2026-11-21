@@ -2,6 +2,7 @@ import { Audio, type AudioMetadata } from './audio';
 import { SampleAligner, sampleBytes } from './core/base64';
 import type { Config, RequestOptions } from './core/config';
 import {
+  APIConnectionError,
   BakbakError,
   interruptedBy,
   isObject,
@@ -105,11 +106,26 @@ async function* sseChunks(
         if (!isObject(payload)) continue;
         if (payload.type === 'chunk') {
           if (typeof payload.data !== 'string') continue;
+          let audio: Uint8Array | undefined;
+          try {
+            audio = aligner.push(payload.data);
+          } catch {
+            // The stream broke at this point (BEHAVIOR.md §6.4): before audio this is
+            // retried; after audio it is a StreamInterruptedError.
+            throw gotChunk
+              ? new StreamInterruptedError(
+                  `A chunk's audio data was not valid base64, after ${delivered} bytes of audio.`,
+                  { retryable: true, requestId, audioBytes: delivered },
+                )
+              : new APIConnectionError("A chunk's audio data was not valid base64.", {
+                  retryable: true,
+                  requestId,
+                });
+          }
           if (!gotChunk) {
             gotChunk = true;
             hooks.onCommitted(requestId);
           }
-          const audio = aligner.push(payload.data);
           if (audio) {
             delivered += audio.length;
             yield {

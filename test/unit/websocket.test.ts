@@ -3,12 +3,14 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import {
+  APIConnectionError,
   APITimeoutError,
   Bakbak,
   BakbakError,
   type ClientOptions,
   type ContextEvent,
   InternalServerError,
+  StreamInterruptedError,
   type TTSWebSocket,
   WebSocketClosedError,
 } from '../../src/index';
@@ -710,6 +712,45 @@ describe('WebSocket: limits, timeouts and closes', () => {
     await new Promise((r) => setTimeout(r, 60));
     await ws.context().send({ text: 'b' });
     expect(await long.result()).toMatchObject({ audioBytes: 40 });
+  });
+
+  it('fails only its own request on a chunk that is not valid base64, keeping the connection', async () => {
+    const m = await mock((peer, msg) => {
+      const base = { context_id: msg.context_id, request_id: `req_${String(msg.text)}` };
+      const send = (o: object) => peer.ws.send(JSON.stringify({ ...o, ...base }));
+      if (msg.text === 'a') {
+        send({ type: 'chunk', data: b64([1, 2]) });
+        send({ type: 'chunk', data: 'not*base64!' });
+        send({ type: 'chunk', data: b64([3, 4]) }); // still part of a: must not reach b
+        send({ type: 'done', done: true });
+      } else if (msg.text === 'first-bad') {
+        send({ type: 'chunk', data: '@@@@' });
+        send({ type: 'done', done: true });
+      } else {
+        send({ type: 'chunk', data: b64([9, 9]) });
+        send({ type: 'done', done: true });
+      }
+    });
+    const ws = socketFor(m);
+    const ctx = ws.context();
+    const a = await ctx.send({ text: 'a', output_format: { container: 'raw', encoding: 'pcm_s16le' } });
+    const b = await ctx.send({ text: 'b', output_format: { container: 'raw', encoding: 'pcm_s16le' } });
+    const c = await ws.context().send({ text: 'first-bad' });
+    const errA = await a.result().catch((e: unknown) => e);
+    expect(errA).toBeInstanceOf(StreamInterruptedError);
+    expect(errA).toMatchObject({ audioBytes: 2, requestId: 'req_a' });
+    expect(await b.result()).toMatchObject({ requestId: 'req_b', audioBytes: 2 });
+    const errC = await c.result().catch((e: unknown) => e);
+    expect(errC).toBeInstanceOf(APIConnectionError);
+    expect((errC as APIConnectionError).retryable).toBe(true);
+    ctx.endInput();
+    const events = await drain(ctx.events());
+    // a's third chunk never reached b: b's only audio is its own.
+    const bAudio = events
+      .filter((e) => e.type === 'chunk' && e.request === b)
+      .map((e) => [...(e as { audio: Uint8Array }).audio]);
+    expect(bAudio).toEqual([[9, 9]]);
+    expect(m.peers.length).toBe(1);
   });
 
   it('routes messages about no request to onNotice and keeps going', async () => {
