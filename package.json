@@ -1,6 +1,6 @@
 {
   "name": "bakbak",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "description": "Official JavaScript and TypeScript SDK for the Bakbak text-to-speech API by Raya",
   "license": "Apache-2.0",
   "author": "Raya Voice AI <support@getraya.app>",

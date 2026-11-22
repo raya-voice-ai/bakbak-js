@@ -4,6 +4,15 @@ All notable changes to this package are documented here. The format follows
 [Conventional Commits](https://www.conventionalcommits.org/) and the file is maintained by
 release-please.
 
+## [1.0.0-rc.4](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-11-22)
+
+
+### Bug Fixes
+
+* read a default WAV's encoding and sample rate from its fmt chunk ([eef0d81](https://github.com/raya-voice-ai/bakbak-js/commit/eef0d810d4ebce8adb81517046af81d403223df7))
+* say that mp3 has to be decoded when toWav() is asked to wrap it ([eef0d81](https://github.com/raya-voice-ai/bakbak-js/commit/eef0d810d4ebce8adb81517046af81d403223df7))
+* stop repeating a validation error's text in the 422 message ([eef0d81](https://github.com/raya-voice-ai/bakbak-js/commit/eef0d810d4ebce8adb81517046af81d403223df7))
+
 ## [1.0.0-rc.3](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.2...v1.0.0-rc.3) (2026-11-21)
 
 
