@@ -452,6 +452,9 @@ describe('AudioStream', () => {
     expect(stream.encoding).toBeUndefined();
     expect(stream.sampleRate).toBeUndefined();
     expect(stream.contentType).toBeUndefined();
+    // toWav() cannot guess them, and says how to have the response state them.
+    const audio = await client.tts.stream(PARAMS).toAudio();
+    expect(() => audio.toWav()).toThrow(/Send output_format with the request .* toWav\(audio\.data/);
   });
 
   it('exposes the request id and metadata, and can be read only once', async () => {

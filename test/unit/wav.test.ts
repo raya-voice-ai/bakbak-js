@@ -285,11 +285,15 @@ describe('Audio', () => {
     expect(audio.requestId).toBe('r');
   });
 
-  it('explains what is missing for raw audio of unknown format', () => {
-    expect(() => new Audio(new Uint8Array(8)).toWav()).toThrow(/toWav\(audio.data/);
-    expect(() => new Audio(new Uint8Array(8), { encoding: 'pcm_s16le' }).toWav()).toThrow(
-      /did not state this audio's encoding and sample rate/,
-    );
+  it('explains what is missing for raw audio of unknown format, and how to get it', () => {
+    const message =
+      "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in " +
+      "WAV. Send output_format with the request (e.g. { container: 'raw', encoding: 'pcm_s16le', " +
+      'sample_rate: 24000 }) and the response states them; if you know them, call toWav(audio.data, ' +
+      '{ encoding, sampleRate }).';
+    expect(() => new Audio(new Uint8Array(8)).toWav()).toThrow(new BakbakError(message));
+    expect(() => new Audio(new Uint8Array(8), { encoding: 'pcm_s16le' }).toWav()).toThrow(message);
+    expect(() => new Audio(new Uint8Array(8), { sampleRate: 24000 }).toWav()).toThrow(message);
   });
 
   it('says that mp3 has to be decoded, not wrapped, whatever the metadata says', () => {

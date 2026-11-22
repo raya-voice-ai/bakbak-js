@@ -218,8 +218,9 @@ export class Audio {
       throw new BakbakError(MP3_TO_WAV);
     }
     if (this.encoding === undefined || this.sampleRate === undefined) {
+      // A stream sent without output_format is reported this way on purpose (BEHAVIOR.md §1).
       throw new BakbakError(
-        "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in WAV; if you know them, call toWav(audio.data, { encoding, sampleRate }).",
+        "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in WAV. Send output_format with the request (e.g. { container: 'raw', encoding: 'pcm_s16le', sample_rate: 24000 }) and the response states them; if you know them, call toWav(audio.data, { encoding, sampleRate }).",
       );
     }
     return toWav(this.data, { encoding: this.encoding, sampleRate: this.sampleRate });
