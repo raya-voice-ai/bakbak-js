@@ -4,6 +4,14 @@ All notable changes to this package are documented here. The format follows
 [Conventional Commits](https://www.conventionalcommits.org/) and the file is maintained by
 release-please.
 
+## [1.0.0-rc.6](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.5...v1.0.0-rc.6) (2026-11-22)
+
+
+### Documentation
+
+* let the examples run on plain Node 22.18+ ([#7](https://github.com/raya-voice-ai/bakbak-js/issues/7)) ([a433c49](https://github.com/raya-voice-ai/bakbak-js/commit/a433c49f13283ca2807a93f3d24ba804891f5258))
+* point documentation links at docs.bakbak.si ([#8](https://github.com/raya-voice-ai/bakbak-js/issues/8)) ([96bad3b](https://github.com/raya-voice-ai/bakbak-js/commit/96bad3b4a0962573c3b6d56d94848c7b98ac4780))
+
 ## [1.0.0-rc.5](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-11-22)
 
 
