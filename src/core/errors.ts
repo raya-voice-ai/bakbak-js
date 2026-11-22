@@ -228,10 +228,17 @@ export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * pydantic wraps a validator's error as `Value error, <text>`. The server's own `message`
+ * quotes the text without it, so it is dropped before the message is checked for the list.
+ */
+const PYDANTIC_VALUE_ERROR = 'Value error, ';
+
 function renderDetail(entry: unknown): string {
   if (typeof entry === 'string') return entry;
   if (!isObject(entry)) return '';
-  const msg = typeof entry.msg === 'string' ? entry.msg : '';
+  let msg = typeof entry.msg === 'string' ? entry.msg : '';
+  if (msg.startsWith(PYDANTIC_VALUE_ERROR)) msg = msg.slice(PYDANTIC_VALUE_ERROR.length);
   if (!msg) return ''; // an entry with no msg is skipped (BEHAVIOR.md §3.2)
   const loc = Array.isArray(entry.loc)
     ? entry.loc

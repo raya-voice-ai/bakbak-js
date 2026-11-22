@@ -1,4 +1,4 @@
-import { Audio } from '../audio';
+import { Audio, wavFormat } from '../audio';
 import type { Config, RequestOptions } from '../core/config';
 import { BakbakError, interruptedBy } from '../core/errors';
 import { Attempt, fetchOk, jsonBody, retriesOf, timeoutOf, toSDKError, waitToRetry } from '../core/http';
@@ -43,8 +43,9 @@ export class TTS {
   }
 
   /**
-   * Synthesizes a whole file. Without `output_format` the API returns 24 kHz WAV. Retries
-   * failures before the first byte of audio; never after it.
+   * Synthesizes a whole file. Without `output_format` the API returns 24 kHz WAV, whose
+   * encoding and sample rate are read from its header. Retries failures before the first
+   * byte of audio; never after it.
    */
   async generate(params: TTSParams, options?: RequestOptions): Promise<Audio> {
     const cfg = this.#cfg;
@@ -73,6 +74,11 @@ export class TTS {
         const data = await readAll(res, attempt, (n) => {
           received += n;
         });
+        if (metadata.encoding === undefined && metadata.sampleRate === undefined) {
+          // Without output_format the API sends its WAV with no X-Audio-* headers; the file
+          // says what it holds (BEHAVIOR.md §5.2).
+          Object.assign(metadata, wavFormat(data));
+        }
         cfg.logger?.debug?.('generate: done', { requestId, bytes: data.length });
         return new Audio(data, metadata);
       } catch (thrown) {

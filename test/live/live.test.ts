@@ -52,6 +52,9 @@ describe.skipIf(!enabled)('live: HTTP', () => {
     expect(audio.isWav).toBe(true);
     expect(audio.data.length).toBeGreaterThan(1000);
     expect(audio.requestId).toBeTruthy();
+    // No X-Audio-* headers without output_format: both come from the WAV header.
+    expect(audio.encoding).toMatch(/^pcm_/);
+    expect(audio.sampleRate).toBe(24000);
     expect(audio.toWav()).toBe(audio.data);
   });
 

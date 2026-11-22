@@ -44,7 +44,7 @@ interface HttpScenario {
       request_id?: string;
       content_type?: string;
       encoding?: string;
-      sample_rate?: number;
+      sample_rate?: number | null;
       count?: number;
       ids?: string[];
     };
@@ -179,6 +179,9 @@ describe('conformance: HTTP', () => {
       } catch (err) {
         error = err;
       }
+
+      // Fixtures write an unset value as null; the SDK leaves it undefined.
+      if (result) for (const key of Object.keys(result)) result[key] ??= null;
 
       expect(server.problems).toEqual([]);
       expect(server.attempts, 'attempts').toBe(scenario.exchanges.length);
