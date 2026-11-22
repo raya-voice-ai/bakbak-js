@@ -4,6 +4,18 @@ All notable changes to this package are documented here. The format follows
 [Conventional Commits](https://www.conventionalcommits.org/) and the file is maintained by
 release-please.
 
+## [1.0.0-rc.5](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.4...v1.0.0-rc.5) (2026-11-22)
+
+
+### Bug Fixes
+
+* fail a sendStream whose input has no text it can read, instead of sending nothing ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+* print error classes with their own names (console.log showed _NotFoundError) ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+* read Gemini's raw REST/SSE JSON in sendStream ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+* refuse partial samples in toWav and pad odd data chunks ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+* report a wrong key on the built-in WebSocket as an AuthenticationError, not a retryable connection error ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+* say how to get a stream's format when toWav() cannot wrap it ([4645c23](https://github.com/raya-voice-ai/bakbak-js/commit/4645c23585c3e6eafe2b89c93e08022e54ad44c1))
+
 ## [1.0.0-rc.4](https://github.com/raya-voice-ai/bakbak-js/compare/v1.0.0-rc.3...v1.0.0-rc.4) (2026-11-22)
 
 
