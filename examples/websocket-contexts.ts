@@ -3,7 +3,7 @@
 //   BAKBAK_API_KEY=… BAKBAK_BASE_URL=… npx tsx examples/websocket-contexts.ts
 import { writeFile } from 'node:fs/promises';
 import { Bakbak, toWav, type WebSocketContext } from 'bakbak';
-import { language, model, outPath, voice_id } from './_env';
+import { language, model, outPath, voice_id } from './_env.ts';
 
 const client = new Bakbak();
 const ws = client.tts.websocket({

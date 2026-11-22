@@ -30,7 +30,18 @@ npm run check:size  # the browser bundle stays under 20 KB gzipped, without ws
 | `src/text/`                              | the sentence segmenter and LLM token extraction                            |
 | `test/conformance/`                      | runs `conformance/http` and `conformance/ws` against real local servers    |
 | `test/unit/`, `test/dist/`, `test/live/` | unit, built-package and live tests                                         |
-| `examples/`                              | runnable examples (`npx tsx examples/quickstart.ts`)                       |
+| `examples/`                              | runnable examples (see [Examples](#examples))                              |
+
+### Examples
+
+```sh
+BAKBAK_API_KEY=… npx tsx examples/quickstart.ts   # runs against src/
+npm run build && BAKBAK_API_KEY=… node examples/quickstart.ts   # Node 22.18+, runs against dist/
+```
+
+Plain `node` strips the types itself but resolves `bakbak` through `package.json`, so it needs
+a build. Import other example files with their `.ts` extension (`./_env.ts`), and keep to
+TypeScript that Node can strip: no `enum`, `namespace` or constructor parameter properties.
 
 ### Live tests
 
