@@ -9,6 +9,7 @@ import http from 'node:http';
 import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
+import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 
@@ -63,6 +64,25 @@ describe('dist', () => {
     const pkg = JSON.parse(readFileSync(`${root}package.json`, 'utf8')) as { version: string };
     expect(cjs.VERSION).toBe(pkg.version);
     expect(esm.VERSION).toBe(pkg.version);
+  });
+
+  it('keeps the export name on every class and function', async () => {
+    // esbuild renames a class that refers to itself (`var NotFoundError = class _NotFoundError`),
+    // which console.log(err) and err.constructor.name would show without keepNames.
+    for (const [format, sdk] of [
+      ['CJS', loadCjs()],
+      ['ESM', await loadEsm()],
+    ] as const) {
+      const functions = Object.entries(sdk).filter(([, value]) => typeof value === 'function');
+      expect(functions.length, format).toBeGreaterThan(20);
+      for (const [name, value] of functions) {
+        expect((value as { name: string }).name, `${format} ${name}`).toBe(name);
+      }
+      const err = new sdk.NotFoundError('no such voice', { status: 404 });
+      expect(err.constructor.name).toBe('NotFoundError');
+      expect(err.name).toBe('NotFoundError');
+      expect(inspect(err)).toMatch(/^NotFoundError: no such voice/);
+    }
   });
 
   it('keeps instanceof working between the CJS and ESM copies', async () => {

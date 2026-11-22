@@ -59,6 +59,54 @@ describe('toWav (BEHAVIOR.md §5.2)', () => {
     });
   }
 
+  for (const encoding of ['pcm_alaw', 'pcm_mulaw']) {
+    it(`pads an odd-sized data chunk with one zero byte (${encoding})`, () => {
+      const pcm = new Uint8Array(5).fill(0xd5);
+      const wav = toWav(pcm, { encoding, sampleRate: 8000 });
+      const v = view(wav);
+      expect(wav.length).toBe(58 + 5 + 1);
+      expect(v.getUint32(4, true)).toBe(50 + 5 + 1); // the RIFF size counts the pad byte
+      expect(v.getUint32(4, true) + 8).toBe(wav.length);
+      expect(v.getUint32(46, true)).toBe(5); // fact: samples, not counting the pad
+      expect(v.getUint32(54, true)).toBe(5); // the data size does not count it
+      expect([...wav.subarray(58, 63)]).toEqual([...pcm]);
+      expect(wav[63]).toBe(0);
+      expect(wavFormat(wav)).toEqual({ encoding, sampleRate: 8000 });
+    });
+  }
+
+  it('adds no pad byte to an even-sized data chunk, and the RIFF size matches the file', () => {
+    for (const [encoding, size] of [
+      ['pcm_s16le', 6],
+      ['pcm_f32le', 8],
+      ['pcm_mulaw', 4],
+      ['pcm_alaw', 0],
+    ] as const) {
+      const wav = toWav(new Uint8Array(size), { encoding, sampleRate: 16000 });
+      expect(wav.length, encoding).toBe((encoding === 'pcm_s16le' ? 44 : 58) + size);
+      expect(view(wav).getUint32(4, true) + 8, encoding).toBe(wav.length);
+    }
+  });
+
+  it('refuses bytes that are not a whole number of samples', () => {
+    for (const size of [1, 3, 5, 4801]) {
+      expect(() => toWav(new Uint8Array(size), { encoding: 'pcm_s16le', sampleRate: 24000 })).toThrow(
+        new BakbakError(
+          `Cannot wrap ${size} bytes of pcm_s16le audio in WAV: that is not a whole number of 2-byte samples.`,
+        ),
+      );
+    }
+    for (const size of [1, 2, 3, 5, 6, 7, 4802]) {
+      expect(() => toWav(new Uint8Array(size), { encoding: 'pcm_f32le', sampleRate: 24000 })).toThrow(
+        `Cannot wrap ${size} bytes of pcm_f32le audio in WAV: that is not a whole number of 4-byte samples.`,
+      );
+    }
+    expect(() => toWav(new Uint8Array(3), { encoding: 'pcm_f32le', sampleRate: 24000 })).toThrow(BakbakError);
+    expect(() => new Audio(new Uint8Array(7), { encoding: 'pcm_s16le', sampleRate: 24000 }).toWav()).toThrow(
+      /not a whole number of 2-byte samples/,
+    );
+  });
+
   it('refuses unknown encodings and bad sample rates', () => {
     expect(() => toWav(new Uint8Array(2), { encoding: 'opus', sampleRate: 8000 })).toThrow(BakbakError);
     expect(() => toWav(new Uint8Array(2), { encoding: 'pcm_s16le', sampleRate: 0 })).toThrow(BakbakError);
@@ -237,11 +285,15 @@ describe('Audio', () => {
     expect(audio.requestId).toBe('r');
   });
 
-  it('explains what is missing for raw audio of unknown format', () => {
-    expect(() => new Audio(new Uint8Array(8)).toWav()).toThrow(/toWav\(audio.data/);
-    expect(() => new Audio(new Uint8Array(8), { encoding: 'pcm_s16le' }).toWav()).toThrow(
-      /did not state this audio's encoding and sample rate/,
-    );
+  it('explains what is missing for raw audio of unknown format, and how to get it', () => {
+    const message =
+      "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in " +
+      "WAV. Send output_format with the request (e.g. { container: 'raw', encoding: 'pcm_s16le', " +
+      'sample_rate: 24000 }) and the response states them; if you know them, call toWav(audio.data, ' +
+      '{ encoding, sampleRate }).';
+    expect(() => new Audio(new Uint8Array(8)).toWav()).toThrow(new BakbakError(message));
+    expect(() => new Audio(new Uint8Array(8), { encoding: 'pcm_s16le' }).toWav()).toThrow(message);
+    expect(() => new Audio(new Uint8Array(8), { sampleRate: 24000 }).toWav()).toThrow(message);
   });
 
   it('says that mp3 has to be decoded, not wrapped, whatever the metadata says', () => {

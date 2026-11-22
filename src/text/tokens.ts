@@ -6,7 +6,9 @@
  * - OpenAI Chat Completions chunks: `choices[0].delta.content`;
  * - OpenAI Responses events: `{ type: 'response.output_text.delta', delta }`;
  * - Anthropic Messages events: `{ type: 'content_block_delta', delta: { text } }`;
- * - Google Gemini responses: `.text` (a getter in `@google/genai`, a method in older SDKs);
+ * - Google Gemini responses, as SDK objects or as the REST/SSE JSON: the `text` of each part
+ *   of `candidates[0].content.parts` joined, skipping thought parts (what the `.text` getter
+ *   of `@google/genai` returns), else `.text` (a getter, or a method in older SDKs);
  * - Vercel AI SDK `fullStream` parts: `{ type: 'text-delta', text | textDelta }`.
  */
 export function textOf(item: unknown): string | undefined {
@@ -31,10 +33,52 @@ export function textOf(item: unknown): string | undefined {
     }
   }
   if (typeof o.type === 'string') return undefined; // Another typed event: not text.
+  const candidates = o.candidates;
+  if (Array.isArray(candidates)) {
+    const parts = (candidates[0] as { content?: { parts?: unknown } } | undefined)?.content?.parts;
+    // Read here rather than through the SDK's getter, which warns on the console for a
+    // response with a function call. Once there are parts, they decide.
+    if (Array.isArray(parts)) return geminiText(parts);
+  }
   try {
     const text = typeof o.text === 'function' ? (o.text as () => unknown).call(item) : o.text;
     return typeof text === 'string' ? text : undefined;
   } catch {
     return undefined; // Gemini's text() throws for a response without text (e.g. blocked).
   }
+}
+
+/** The text parts of a Gemini candidate joined, skipping thoughts; undefined if there are none. */
+function geminiText(parts: unknown[]): string | undefined {
+  let text: string | undefined;
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) continue;
+    const p = part as { text?: unknown; thought?: unknown };
+    if (typeof p.text !== 'string' || p.thought === true) continue;
+    text = (text ?? '') + p.text;
+  }
+  return text;
+}
+
+/**
+ * Whether an item has one of the shapes `textOf` reads, text or not: a string, `null` or
+ * `undefined` (what code that maps events to text yields for an event without any), or an
+ * object with an array `choices`, a string `type`, an array `candidates` or a `text` property
+ * (a value, getter or method). sendStream fails when its input had items, none had text and
+ * some had none of these shapes (BEHAVIOR.md §6.2).
+ */
+export function isKnownShape(item: unknown): boolean {
+  if (typeof item === 'string' || item === null || item === undefined) return true;
+  if (typeof item !== 'object') return false;
+  const o = item as Record<string, unknown>;
+  return Array.isArray(o.choices) || typeof o.type === 'string' || Array.isArray(o.candidates) || 'text' in o;
+}
+
+/** The error of a sendStream whose input had no text and items of unknown shapes. */
+export function noTextMessage(items: number): string {
+  return (
+    `sendStream found no text in ${items} item${items === 1 ? '' : 's'}. It reads strings, OpenAI ` +
+    'Chat Completions and Responses events, Anthropic events, Gemini responses (SDK objects or raw ' +
+    'JSON) and Vercel AI SDK parts; map other events to strings first.'
+  );
 }

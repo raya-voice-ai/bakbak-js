@@ -334,6 +334,108 @@ describe('WebSocket: sendStream', () => {
     ]);
   });
 
+  it("accepts Gemini's raw REST/SSE JSON", async () => {
+    const m = await mock((peer, msg) => answer(peer, msg));
+    const ws = socketFor(m);
+    const ctx = ws.context();
+    const gemini = [
+      [{ text: 'Thinking it over.', thought: true }],
+      [{ text: 'Hello there. ' }, { text: 'How' }],
+      [{ text: ' are you?' }],
+    ].map((parts) => ({ candidates: [{ content: { role: 'model', parts } }], modelVersion: 'g' }));
+    await ctx.sendStream(gemini);
+    await drain(ctx.events());
+    expect(m.peers[0]?.received.map((r) => r.text)).toEqual(['Hello there.', 'How are you?']);
+  });
+
+  describe('input with no text', () => {
+    // Events of a shape sendStream does not read, carrying text it must never repeat.
+    const unknown = Array.from({ length: 12 }, (_, i) => ({ event: 'token', payload: `secret ${i}` }));
+
+    it('ends input, then fails naming the shapes it reads, without the items', async () => {
+      const m = await mock((peer, msg) => answer(peer, msg));
+      const ws = socketFor(m);
+      const ctx = ws.context();
+      const err = await ctx.sendStream(unknown).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BakbakError);
+      const message = (err as BakbakError).message;
+      expect(message).toBe(
+        'sendStream found no text in 12 items. It reads strings, OpenAI Chat Completions and ' +
+          'Responses events, Anthropic events, Gemini responses (SDK objects or raw JSON) and ' +
+          'Vercel AI SDK parts; map other events to strings first.',
+      );
+      expect(message).not.toMatch(/secret|token|payload/);
+      expect((err as BakbakError).retryable).toBe(false);
+      expect(await drain(ctx.events())).toEqual([]); // input ended, without an error
+      expect(m.peers.length).toBe(0); // nothing was sent, so nothing opened
+      await expect(ws.context().sendStream([{ x: 1 }])).rejects.toThrow('no text in 1 item.');
+    });
+
+    it('leaves input open with endInput: false', async () => {
+      const m = await mock((peer, msg) => answer(peer, msg));
+      const ws = socketFor(m);
+      const ctx = ws.context();
+      await expect(ctx.sendStream(unknown, { endInput: false })).rejects.toThrow('no text in 12 items');
+      await ctx.send({ text: 'Still open.' });
+      ctx.endInput();
+      expect((await drain(ctx.events())).map((e) => e.type)).toEqual(['chunk', 'done']);
+    });
+
+    it('does not fail for recognised items without text, null, undefined, an empty source, or some text', async () => {
+      const m = await mock((peer, msg) => answer(peer, msg));
+      const ws = socketFor(m);
+      const toolCalls = [
+        { choices: [{ delta: { role: 'assistant', content: null } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'f', arguments: '{' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { total_tokens: 9 } },
+      ];
+      const typed = [{ type: 'message_start' }, { type: 'message_stop' }];
+      const gemini = [{ candidates: [{ content: { parts: [{ functionCall: { name: 'f' } }] } }] }];
+      const getter = [{ text: undefined }];
+      // Code that maps events to text yields null or undefined for events without any.
+      const mapped = [null, null];
+      const mappedMixed = [...toolCalls, undefined];
+      for (const source of [toolCalls, typed, gemini, getter, mapped, mappedMixed, [], ['', '']]) {
+        const ctx = ws.context();
+        await expect(ctx.sendStream(source)).resolves.toBeUndefined();
+        expect(await drain(ctx.events())).toEqual([]);
+      }
+      const ctx = ws.context();
+      await ctx.sendStream([...unknown, 'Some text.']);
+      await drain(ctx.events());
+      expect(m.peers[0]?.received.map((r) => r.text)).toEqual(['Some text.']);
+    });
+
+    it('does not fail when cancel() stops it', async () => {
+      const m = await mock((peer, msg) => {
+        if (msg.cancel)
+          peer.ws.send(JSON.stringify({ type: 'cancelled', done: true, context_id: msg.context_id }));
+      });
+      const ws = socketFor(m);
+      const ctx = ws.context();
+      const items = [{ event: 'a' }, { event: 'b' }];
+      let pulled = 0;
+      const llm = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              const value = items.shift();
+              if (value === undefined) return new Promise<IteratorResult<unknown>>(() => {});
+              pulled++;
+              return { done: false, value };
+            },
+          };
+        },
+      };
+      const sending = ctx.sendStream(llm);
+      await waitFor(() => pulled === 2, 'both items');
+      await ctx.cancel();
+      await expect(sending).resolves.toBeUndefined();
+      expect(await drain(ctx.events())).toEqual([]);
+    });
+  });
+
   it('surfaces a failing token source through sendStream and events()', async () => {
     const m = await mock((peer, msg) => answer(peer, msg));
     const ws = socketFor(m);

@@ -1,4 +1,4 @@
-import type { Logger } from '../core/config';
+import type { FetchFn, Logger } from '../core/config';
 import {
   APIConnectionError,
   APITimeoutError,
@@ -37,6 +37,8 @@ export interface OpenOptions {
   runtime: RuntimeInfo;
   connectTimeout: number;
   logger: Logger | undefined;
+  /** The client's fetch, for asking over HTTP why a global WebSocket's handshake failed. */
+  fetch: FetchFn;
 }
 
 /** Replaces the API key in a URL's query string with `***`, for anything that is logged. */
@@ -76,22 +78,33 @@ function loadWs(): Promise<WsCtor | undefined> {
   return wsModule;
 }
 
-/** A refused upgrade becomes the §3 error for its status and body. */
-function upgradeError(res: UpgradeResponse, text: string): BakbakError {
+/**
+ * A refused upgrade becomes the §3 error for its status and body; so does the answer to the
+ * plain GET sent when a global WebSocket hides the refusal. `header` takes lower-case names.
+ */
+function refusalError(
+  status: number,
+  reason: string | undefined,
+  header: (name: string) => string | null | undefined,
+  text: string,
+): BakbakError {
   let body: unknown = text || undefined;
   try {
     body = JSON.parse(text);
   } catch {
     // Not JSON: keep the text.
   }
+  if (status >= 300 && status < 400) return redirectError(status, header('location'), header('x-request-id'));
+  const err = makeStatusError(status, body, header('x-request-id'), reason);
+  return setRetryAfter(err, parseRetryAfter(header('retry-after')));
+}
+
+function upgradeError(res: UpgradeResponse, text: string): BakbakError {
   const header = (name: string) => {
     const value = res.headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
-  const status = res.statusCode ?? 0;
-  if (status >= 300 && status < 400) return redirectError(status, header('location'), header('x-request-id'));
-  const err = makeStatusError(status, body, header('x-request-id'), res.statusMessage);
-  return setRetryAfter(err, parseRetryAfter(header('retry-after')));
+  return refusalError(res.statusCode ?? 0, res.statusMessage, header, text);
 }
 
 function openWithWs(WS: WsCtor, o: OpenOptions, h: SocketHandlers): Promise<Socket> {
@@ -167,6 +180,66 @@ function openWithWs(WS: WsCtor, o: OpenOptions, h: SocketHandlers): Promise<Sock
 /** The WHATWG WebSocket constructor, plus the `headers` option undici and some runtimes accept. */
 type NativeCtor = new (url: string, options?: string[] | { headers: Record<string, string> }) => WebSocket;
 
+/**
+ * The WHATWG WebSocket hides why a handshake failed, so a wrong key would look like a network
+ * failure and be retried. One plain GET to the same URL, with the key placed the same way and
+ * timed by the connect timeout, tells (BEHAVIOR.md §6.1): the endpoint answers 426 to a request
+ * that is not an upgrade, so a 426 means the key and URL are good and the WebSocket itself was
+ * refused; any other error status is the §3 error the upgrade got. Without an answer, or with a
+ * 2xx, `noAnswer` stands.
+ */
+async function askWhyHandshakeFailed(
+  url: string,
+  o: OpenOptions,
+  withHeaders: boolean,
+  noAnswer: BakbakError,
+): Promise<BakbakError> {
+  const httpURL = url.replace(/^ws/i, 'http'); // wss: → https:, ws: → http:
+  const controller = new AbortController();
+  const timer = startTimer(() => controller.abort(), o.connectTimeout);
+  try {
+    const res = await o.fetch(httpURL, {
+      method: 'GET',
+      // Where the key goes in the query string (browsers), it is already in the URL.
+      headers: withHeaders ? o.headers : {},
+      // Never follow a redirect: fetch would carry X-API-Key to the other origin (BEHAVIOR.md §8).
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    o.logger?.debug?.('websocket: the handshake failed; asked over HTTP', {
+      url: redactKey(httpURL),
+      status: res.status,
+    });
+    if (res.type === 'opaqueredirect') return redirectError(undefined, null, null);
+    if (res.status === 426) {
+      await res.body?.cancel().catch(() => {});
+      return new APIConnectionError(
+        'The WebSocket handshake failed, but the API accepted the key and URL over HTTP: the network or a ' +
+          'proxy refused the WebSocket.',
+      );
+    }
+    if (res.status < 300) {
+      await res.body?.cancel().catch(() => {});
+      return noAnswer;
+    }
+    let text = '';
+    try {
+      text = await res.text();
+    } catch {
+      // A body that cannot be read leaves the status to speak for itself.
+    }
+    return refusalError(res.status, res.statusText, (name) => res.headers.get(name), text);
+  } catch (err) {
+    o.logger?.debug?.('websocket: the handshake failed; no answer over HTTP', {
+      url: redactKey(httpURL),
+      error: err instanceof Error ? scrub(err.message, o.apiKey) : undefined,
+    });
+    return noAnswer;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function openWithGlobal(Native: NativeCtor, o: OpenOptions, h: SocketHandlers): Promise<Socket> {
   const withHeaders = o.runtime.nativeWebSocketHeaders;
   const url = withHeaders
@@ -184,6 +257,14 @@ function openWithGlobal(Native: NativeCtor, o: OpenOptions, h: SocketHandlers): 
       failed = true;
       clearTimeout(timer);
       reject(err);
+    };
+    // The handshake failed before open, and this WebSocket does not say why: ask over HTTP,
+    // once per attempt (error and close both report it), and settle with what that tells.
+    const handshakeFailed = (noAnswer: BakbakError) => {
+      if (opened || failed) return;
+      failed = true;
+      clearTimeout(timer);
+      askWhyHandshakeFailed(url, o, withHeaders, noAnswer).then(reject, reject);
     };
     const ws = withHeaders ? new Native(url, { headers: o.headers }) : new Native(url);
     ws.binaryType = 'arraybuffer';
@@ -206,16 +287,19 @@ function openWithGlobal(Native: NativeCtor, o: OpenOptions, h: SocketHandlers): 
       });
     };
     ws.onerror = () => {
-      fail(
+      handshakeFailed(
         new APIConnectionError(
-          'The WebSocket handshake failed. This runtime does not expose why (a wrong API key, a wrong base URL, ' +
-            'or the network); the same key and URL with client.voices.list() show the HTTP error.',
+          'The WebSocket handshake failed, and neither the WebSocket nor an HTTP request to the same URL ' +
+            'said why: check the network, the base URL and the API key.',
         ),
       );
     };
     ws.onclose = (event) => {
       if (opened) h.onClose(event.code, event.reason);
-      else fail(new APIConnectionError(`The WebSocket closed during the handshake (code ${event.code}).`));
+      else
+        handshakeFailed(
+          new APIConnectionError(`The WebSocket closed during the handshake (code ${event.code}).`),
+        );
     };
     ws.onmessage = (event) => {
       if (typeof event.data === 'string') h.onMessage(event.data);

@@ -86,7 +86,9 @@ function mediaType(contentType: string | undefined): string | undefined {
 /**
  * Wraps raw mono audio in a WAV header (BEHAVIOR.md §5.2): the canonical 44-byte PCM header
  * for `pcm_s16le`; for `pcm_f32le`, `pcm_alaw` and `pcm_mulaw` an 18-byte `fmt ` chunk plus
- * a `fact` chunk, 58 bytes in all. Throws for mp3, which has to be decoded instead.
+ * a `fact` chunk, 58 bytes in all. An odd-sized `data` chunk is followed by a zero pad byte,
+ * as RIFF requires. Throws for mp3, which has to be decoded instead, and for bytes that are
+ * not a whole number of samples (an odd length for 16 bits, not a multiple of 4 for 32).
  */
 export function toWav(pcm: Uint8Array, options: WavOptions): Uint8Array {
   if (options.encoding === 'mp3') throw new BakbakError(MP3_TO_WAV);
@@ -100,13 +102,22 @@ export function toWav(pcm: Uint8Array, options: WavOptions): Uint8Array {
   if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
     throw new BakbakError(`toWav needs a positive integer sampleRate, got ${sampleRate}.`);
   }
+  const blockAlign = format.bits / 8;
+  if (pcm.length % blockAlign !== 0) {
+    // A header for whole samples would disagree with the data: players misread or reject it.
+    throw new BakbakError(
+      `Cannot wrap ${pcm.length} bytes of ${options.encoding} audio in WAV: that is not a whole number of ${blockAlign}-byte samples.`,
+    );
+  }
   const extended = format.tag !== 1;
   const headerSize = extended ? 58 : 44;
-  const blockAlign = format.bits / 8;
-  const out = new Uint8Array(headerSize + pcm.length);
+  // RIFF chunks are word aligned: an odd-sized data chunk (8-bit audio) gets a pad byte that
+  // the RIFF size counts and the data size does not.
+  const pad = pcm.length % 2;
+  const out = new Uint8Array(headerSize + pcm.length + pad); // the pad byte stays zero
   const view = new DataView(out.buffer);
   ascii(view, 0, 'RIFF');
-  view.setUint32(4, headerSize - 8 + pcm.length, true);
+  view.setUint32(4, headerSize - 8 + pcm.length + pad, true);
   ascii(view, 8, 'WAVE');
   ascii(view, 12, 'fmt ');
   view.setUint32(16, extended ? 18 : 16, true);
@@ -121,7 +132,7 @@ export function toWav(pcm: Uint8Array, options: WavOptions): Uint8Array {
     view.setUint16(36, 0, true); // cbSize
     ascii(view, 38, 'fact');
     view.setUint32(42, 4, true);
-    view.setUint32(46, Math.floor(pcm.length / blockAlign), true);
+    view.setUint32(46, pcm.length / blockAlign, true); // samples
     offset = 50;
   }
   ascii(view, offset, 'data');
@@ -197,8 +208,9 @@ export class Audio {
 
   /**
    * The audio as a WAV file: the bytes unchanged if they already are one, else raw audio
-   * wrapped in a WAV header. Throws for mp3, which has to be decoded instead, and for raw
-   * audio whose encoding or sample rate is unknown.
+   * wrapped in a WAV header. Throws for mp3, which has to be decoded instead, for raw audio
+   * whose encoding or sample rate is unknown, and for raw audio that is not a whole number of
+   * samples.
    */
   toWav(): Uint8Array {
     if (this.isWav) return this.data;
@@ -206,8 +218,9 @@ export class Audio {
       throw new BakbakError(MP3_TO_WAV);
     }
     if (this.encoding === undefined || this.sampleRate === undefined) {
+      // A stream sent without output_format is reported this way on purpose (BEHAVIOR.md §1).
       throw new BakbakError(
-        "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in WAV; if you know them, call toWav(audio.data, { encoding, sampleRate }).",
+        "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in WAV. Send output_format with the request (e.g. { container: 'raw', encoding: 'pcm_s16le', sample_rate: 24000 }) and the response states them; if you know them, call toWav(audio.data, { encoding, sampleRate }).",
       );
     }
     return toWav(this.data, { encoding: this.encoding, sampleRate: this.sampleRate });

@@ -56,17 +56,26 @@ describe('dangerouslyAllowBrowser (BEHAVIOR.md §8)', () => {
     }
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const logs: string[] = [];
+    const probes: Array<{ url: string; init: RequestInit }> = [];
     const client = new Bakbak({
       apiKey: 'sk_secret/+=',
       baseURL: 'https://api.example',
       dangerouslyAllowBrowser: true,
       maxRetries: 0,
       logger: { debug: (m, f) => logs.push(`${m} ${JSON.stringify(f)}`) },
+      // The browser hides why the handshake failed; the GET sent to find out gets no answer.
+      fetch: async (url, init) => {
+        probes.push({ url, init });
+        throw new TypeError('Failed to fetch');
+      },
     });
     const ws = client.tts.websocket();
     await expect(ws.connect()).rejects.toThrow(/handshake failed/);
-    expect(urls).toEqual([
-      `wss://api.example/v1/text-to-speech/ws?X-API-Key=${encodeURIComponent('sk_secret/+=')}`,
+    const query = `?X-API-Key=${encodeURIComponent('sk_secret/+=')}`;
+    expect(urls).toEqual([`wss://api.example/v1/text-to-speech/ws${query}`]);
+    // The same URL over https, the key in the same place: no headers, so no CORS preflight.
+    expect(probes.map((p) => [p.url, p.init.headers])).toEqual([
+      [`https://api.example/v1/text-to-speech/ws${query}`, {}],
     ]);
     expect(logs.join('\n')).toContain('X-API-Key=***');
     expect(logs.join('\n')).not.toContain('sk_secret');

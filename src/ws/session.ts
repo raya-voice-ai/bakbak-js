@@ -24,7 +24,7 @@ import {
   startTimer,
 } from '../core/util';
 import { Segmenter, type SegmenterOptions } from '../text/segmenter';
-import { textOf } from '../text/tokens';
+import { isKnownShape, noTextMessage, textOf } from '../text/tokens';
 import type { TTSDefaults } from '../types';
 import { openSocket, type Socket } from './transport';
 
@@ -276,6 +276,7 @@ class Session {
             runtime: cfg.runtime,
             connectTimeout: cfg.connectTimeout,
             logger: cfg.logger,
+            fetch: cfg.fetch,
           },
           {
             onMessage: (data) => this.onMessage(conn, data),
@@ -1092,8 +1093,9 @@ export class WebSocketContext {
   /**
    * Sends text that arrives in pieces (LLM tokens), one sentence per request as soon as each
    * sentence is complete, then calls `endInput()` unless `endInput: false`. Accepts strings
-   * and OpenAI, Anthropic, Gemini and Vercel AI SDK stream events. Resolves when every
-   * sentence is on the wire.
+   * and OpenAI, Anthropic, Gemini (SDK objects or raw REST/SSE JSON) and Vercel AI SDK
+   * stream events. Resolves when every sentence is on the wire. If no item had text and some
+   * had none of those shapes, it ends input as usual and then rejects with a `BakbakError`.
    */
   sendStream(
     source: AsyncIterable<unknown> | Iterable<unknown>,
@@ -1126,6 +1128,11 @@ export class WebSocketContext {
         await this.send({ ...options.params, text }, options);
       }
     };
+    // Items of no shape textOf reads, with no text from any item, mean events it cannot read
+    // (BEHAVIOR.md §6.2): fail rather than return having sent nothing.
+    let items = 0;
+    let sawText = false;
+    let sawUnknown = false;
     try {
       for (;;) {
         const step = await Promise.race([iterator.next(), stopped.promise]);
@@ -1135,8 +1142,14 @@ export class WebSocketContext {
           break;
         }
         if (step.done) break;
+        items++;
         const text = textOf(step.value);
-        if (text) await sendAll(segmenter.push(text));
+        if (text) {
+          sawText = true;
+          await sendAll(segmenter.push(text));
+        } else if (!sawText && !sawUnknown && !isKnownShape(step.value)) {
+          sawUnknown = true;
+        }
       }
       if (!cancelled) await sendAll(segmenter.flush());
     } catch (error) {
@@ -1149,6 +1162,8 @@ export class WebSocketContext {
       ctx.onCancel.delete(stop);
     }
     if (options.endInput !== false) this.endInput();
+    // Never with item contents: they are the caller's text (BEHAVIOR.md §8).
+    if (!cancelled && !sawText && sawUnknown) throw new BakbakError(noTextMessage(items));
   }
 
   /** No more requests: `events()` and `audio()` end once every request has finished. */

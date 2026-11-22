@@ -2,7 +2,7 @@
 import http from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { APIConnectionError, APIStatusError, Bakbak, InternalServerError } from '../../src/index';
+import { APIStatusError, Bakbak, InternalServerError } from '../../src/index';
 
 const KEY = 'sk_live_redirect_test';
 const servers: http.Server[] = [];
@@ -110,7 +110,7 @@ describe('redirects are never followed', () => {
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   it.skipIf(nodeMajor < 22)(
-    'WebSocket (global): a redirected upgrade fails and the key stays home',
+    'WebSocket (global): a redirected upgrade is an APIStatusError and the key stays home',
     async () => {
       const other = await elsewhere();
       const api = await redirecting(other.url);
@@ -118,11 +118,14 @@ describe('redirects are never followed', () => {
         apiKey: KEY,
         baseURL: api.url,
         webSocket: 'global',
-        maxRetries: 0,
+        maxRetries: 2,
       }).tts.websocket();
       const err = await ws.connect().catch((e: unknown) => e);
       await ws.close();
-      expect(err).toBeInstanceOf(APIConnectionError);
+      // The WebSocket hides the 302; the plain GET sent to find out why gets it too.
+      expect(err).toBeInstanceOf(APIStatusError);
+      expect(err).toMatchObject({ status: 302, retryable: false, requestId: 'req_302' });
+      expect(api.hits()).toBe(2); // the upgrade and the GET, not retried
       expect(other.seen).toEqual([]);
     },
   );

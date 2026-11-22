@@ -54,9 +54,33 @@ jobs:
           npm run test:dist
           npm run check:package
           npm run check:size
+      # A stable version always takes the `latest` dist-tag. A pre-release takes `latest` too
+      # while npm's `latest` is absent or itself a pre-release, so that `npm install bakbak`
+      # gets the newest release candidate rather than the first one; once a stable version
+      # holds `latest`, pre-releases go to `next` and leave it alone. If npm cannot say what
+      # `latest` is (any failure but the package not existing yet), the job stops rather than
+      # guess: re-run it.
       - name: Publish with provenance
         run: |
           version=$(node -p "require('./package.json').version")
           tag=latest
-          case "$version" in *-*) tag=next ;; esac
+          case "$version" in
+            *-*)
+              if current=$(npm view bakbak dist-tags.latest 2>"$RUNNER_TEMP/npm-view.log"); then
+                :
+              elif grep -q E404 "$RUNNER_TEMP/npm-view.log"; then
+                current=
+              else
+                cat "$RUNNER_TEMP/npm-view.log"
+                echo "::error::npm view bakbak dist-tags.latest failed; not publishing under a guessed dist-tag."
+                exit 1
+              fi
+              case "$current" in
+                "" | *-*) tag=latest ;;
+                *) tag=next ;;
+              esac
+              echo "npm's latest is ${current:-absent}"
+              ;;
+          esac
+          echo "Publishing $version under the $tag dist-tag"
           npm publish --provenance --access public --tag "$tag"
