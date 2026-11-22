@@ -8,6 +8,7 @@ import {
   BakbakError,
   StreamInterruptedError,
   type TTSParams,
+  toWav,
   VERSION,
 } from '../../src/index';
 import { recordingSleep } from '../helpers';
@@ -144,6 +145,39 @@ describe('requests', () => {
     expect(audio.data.byteOffset).toBe(0);
     expect(audio).toMatchObject({ requestId: 'req_2', encoding: 'pcm_s16le', sampleRate: 16000 });
     expect(audio.toWav().length).toBe(44 + 6);
+  });
+
+  it('reads the encoding and sample rate of a default WAV, which has no X-Audio-* headers, from its fmt chunk', async () => {
+    // The standard model's WAV is written as a stream: its RIFF and data sizes are 0xFFFFFFFF.
+    const wav = Buffer.from(toWav(new Uint8Array(6), { encoding: 'pcm_s16le', sampleRate: 24000 }));
+    wav.writeUInt32LE(0xffffffff, 4);
+    wav.writeUInt32LE(0xffffffff, 40);
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'audio/wav', 'x-request-id': 'req_wav' });
+      res.end(wav);
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    const audio = await client.tts.generate(PARAMS);
+    expect(audio).toMatchObject({ encoding: 'pcm_s16le', sampleRate: 24000, contentType: 'audio/wav' });
+    expect(audio.toWav()).toBe(audio.data);
+  });
+
+  it('prefers the X-Audio-* headers to the WAV header, and leaves a body it cannot read unset', async () => {
+    const wav = toWav(new Uint8Array(4), { encoding: 'pcm_s16le', sampleRate: 24000 });
+    let headers: Record<string, string> = {};
+    let body: Uint8Array = wav;
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, headers);
+      res.end(body);
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    headers = { 'x-audio-format': 'pcm_mulaw', 'x-audio-sample-rate': '8000' };
+    expect(await client.tts.generate(PARAMS)).toMatchObject({ encoding: 'pcm_mulaw', sampleRate: 8000 });
+    headers = { 'content-type': 'audio/wav' };
+    body = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3]);
+    const garbage = await client.tts.generate(PARAMS);
+    expect(garbage.encoding).toBeUndefined();
+    expect(garbage.sampleRate).toBeUndefined();
   });
 
   it('reuses one connection across calls', async () => {

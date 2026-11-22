@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { wavFormat } from '../../src/audio';
 import { Audio, BakbakError, toWav } from '../../src/index';
 
 function view(bytes: Uint8Array): DataView {
@@ -64,6 +65,158 @@ describe('toWav (BEHAVIOR.md §5.2)', () => {
   });
 });
 
+/** Bytes of a little-endian WAV built field by field, for headers toWav never writes. */
+function bytes(...parts: Array<string | [number, 2 | 4] | Uint8Array>): Uint8Array {
+  const out: number[] = [];
+  for (const part of parts) {
+    if (typeof part === 'string') for (const c of part) out.push(c.charCodeAt(0));
+    else if (part instanceof Uint8Array) out.push(...part);
+    else for (let i = 0; i < part[1]; i++) out.push((part[0] >>> (8 * i)) & 0xff);
+  }
+  return new Uint8Array(out);
+}
+
+/** A 16-byte `fmt ` body: tag, channels, rate, byte rate, block align, bits. */
+function fmtBody(tag: number, channels: number, rate: number, bits: number): Uint8Array {
+  const block = (channels * bits) / 8;
+  return bytes([tag, 2], [channels, 2], [rate, 4], [rate * block, 4], [block, 2], [bits, 2]);
+}
+
+/** The KSDATAFORMAT_SUBTYPE GUID for a format tag: the tag, then a fixed tail. */
+function subFormat(tag: number): Uint8Array {
+  return bytes([tag, 2], [0, 2], [0, 2], [0x10, 2], new Uint8Array([0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]));
+}
+
+describe('wavFormat: encoding and sample rate from the fmt chunk (BEHAVIOR.md §5.2)', () => {
+  const formats: Array<[string, number]> = [
+    ['pcm_s16le', 24000],
+    ['pcm_s16le', 8000],
+    ['pcm_f32le', 22050],
+    ['pcm_alaw', 8000],
+    ['pcm_mulaw', 16000],
+  ];
+  for (const [encoding, sampleRate] of formats) {
+    it(`reads ${encoding} at ${sampleRate} Hz from the header toWav writes`, () => {
+      expect(wavFormat(toWav(new Uint8Array(16), { encoding, sampleRate }))).toEqual({
+        encoding,
+        sampleRate,
+      });
+    });
+  }
+
+  it('does not trust the RIFF and data sizes (a streamed WAV gives 0xFFFFFFFF)', () => {
+    const wav = bytes(
+      'RIFF',
+      [0xffffffff, 4],
+      'WAVE',
+      'fmt ',
+      [16, 4],
+      fmtBody(1, 1, 24000, 16),
+      'data',
+      [0xffffffff, 4],
+      new Uint8Array(10),
+    );
+    expect(wavFormat(wav)).toEqual({ encoding: 'pcm_s16le', sampleRate: 24000 });
+    // Cut anywhere after the fmt chunk, it still says what it holds.
+    expect(wavFormat(wav.subarray(0, 36))).toEqual({ encoding: 'pcm_s16le', sampleRate: 24000 });
+  });
+
+  it('skips other chunks before fmt, with their padding byte', () => {
+    const wav = bytes(
+      'RIFF',
+      [0, 4],
+      'WAVE',
+      'LIST',
+      [3, 4],
+      'abc',
+      '\0',
+      'fmt ',
+      [16, 4],
+      fmtBody(7, 1, 8000, 8),
+    );
+    expect(wavFormat(wav)).toEqual({ encoding: 'pcm_mulaw', sampleRate: 8000 });
+  });
+
+  it('accepts RF64', () => {
+    const wav = bytes('RF64', [0xffffffff, 4], 'WAVE', 'fmt ', [16, 4], fmtBody(3, 1, 24000, 32));
+    expect(wavFormat(wav)).toEqual({ encoding: 'pcm_f32le', sampleRate: 24000 });
+  });
+
+  it('takes the format of WAVE_FORMAT_EXTENSIBLE from the first two bytes of its sub-format', () => {
+    const extensible = (tag: number, bits: number) =>
+      bytes(
+        'RIFF',
+        [0xffffffff, 4],
+        'WAVE',
+        'fmt ',
+        [40, 4],
+        fmtBody(0xfffe, 1, 16000, bits),
+        [22, 2], // cbSize
+        [bits, 2], // valid bits
+        [4, 4], // channel mask: front centre
+        subFormat(tag),
+        'data',
+        [0xffffffff, 4],
+      );
+    expect(wavFormat(extensible(1, 16))).toEqual({ encoding: 'pcm_s16le', sampleRate: 16000 });
+    expect(wavFormat(extensible(3, 32))).toEqual({ encoding: 'pcm_f32le', sampleRate: 16000 });
+    expect(wavFormat(extensible(7, 8))).toEqual({ encoding: 'pcm_mulaw', sampleRate: 16000 });
+    expect(wavFormat(extensible(1, 24))).toBeUndefined();
+    // Too short to hold the sub-format.
+    expect(wavFormat(extensible(1, 16).subarray(0, 12 + 8 + 25))).toBeUndefined();
+    expect(
+      wavFormat(bytes('RIFF', [0, 4], 'WAVE', 'fmt ', [18, 4], fmtBody(0xfffe, 1, 16000, 16), [0, 2])),
+    ).toBe(undefined);
+  });
+
+  it('leaves both unset for formats the API does not produce', () => {
+    const wav = (body: Uint8Array) => bytes('RIFF', [0, 4], 'WAVE', 'fmt ', [16, 4], body);
+    expect(wavFormat(wav(fmtBody(1, 2, 24000, 16)))).toBeUndefined(); // stereo
+    expect(wavFormat(wav(fmtBody(1, 1, 24000, 24)))).toBeUndefined(); // 24-bit
+    expect(wavFormat(wav(fmtBody(3, 1, 24000, 64)))).toBeUndefined(); // 64-bit float
+    expect(wavFormat(wav(fmtBody(2, 1, 24000, 4)))).toBeUndefined(); // ADPCM
+    expect(wavFormat(wav(fmtBody(1, 1, 0, 16)))).toBeUndefined(); // no rate
+  });
+
+  it('never throws on a malformed or short body, and leaves both unset', () => {
+    const good = toWav(new Uint8Array(4), { encoding: 'pcm_s16le', sampleRate: 24000 });
+    const bad = [
+      new Uint8Array(0),
+      bytes('RIFF'),
+      bytes('RIFF', [0, 4], 'WAV'),
+      bytes('RIFF', [0, 4], 'WAVE'),
+      bytes('RIFX', [0, 4], 'WAVE', 'fmt ', [16, 4], fmtBody(1, 1, 24000, 16)), // big-endian
+      bytes('RIFF', [0, 4], 'AVI ', 'fmt ', [16, 4], fmtBody(1, 1, 24000, 16)),
+      bytes('RIFF', [0, 4], 'WAVE', 'fmt ', [14, 4], fmtBody(1, 1, 24000, 16)), // fmt too small
+      bytes('RIFF', [0, 4], 'WAVE', 'data', [0xffffffff, 4], 'fmt ', [16, 4], fmtBody(1, 1, 24000, 16)),
+      bytes('RIFF', [0, 4], 'WAVE', 'LIST', [0xffffffff, 4], 'fmt ', [16, 4], fmtBody(1, 1, 24000, 16)),
+      bytes('ID3', new Uint8Array(40)),
+      new Uint8Array(64).fill(0xff),
+    ];
+    for (let n = 0; n < 36; n++) bad.push(good.subarray(0, n)); // the fmt chunk cut short
+    for (const body of bad) expect(wavFormat(body), String([...body])).toBeUndefined();
+
+    // Random bytes behind a valid RIFF/WAVE start, and random bytes alone.
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed & 0xff;
+    };
+    for (let i = 0; i < 2000; i++) {
+      const tail = Uint8Array.from({ length: i % 80 }, random);
+      expect(() => wavFormat(bytes('RIFF', [0, 4], 'WAVE', tail))).not.toThrow();
+      expect(() => wavFormat(tail)).not.toThrow();
+    }
+  });
+
+  it('reads a view into a larger buffer at its own offset', () => {
+    const wav = toWav(new Uint8Array(4), { encoding: 'pcm_alaw', sampleRate: 8000 });
+    const padded = new Uint8Array(wav.length + 3);
+    padded.set(wav, 3);
+    expect(wavFormat(padded.subarray(3))).toEqual({ encoding: 'pcm_alaw', sampleRate: 8000 });
+  });
+});
+
 describe('Audio', () => {
   it('returns WAV bytes unchanged', () => {
     const wav = toWav(new Uint8Array(4), { encoding: 'pcm_s16le', sampleRate: 8000 });
@@ -83,5 +236,12 @@ describe('Audio', () => {
     expect(() => new Audio(new Uint8Array(8), { encoding: 'mp3', sampleRate: 24000 }).toWav()).toThrow(
       BakbakError,
     );
+  });
+
+  it('needs RIFF and WAVE to call the bytes WAV', () => {
+    expect(new Audio(bytes('RIFF', [0, 4], 'WAVE')).isWav).toBe(true);
+    expect(new Audio(bytes('RF64', [0, 4], 'WAVE')).isWav).toBe(true);
+    expect(new Audio(bytes('RIFF', [0, 4], 'AVI ')).isWav).toBe(false);
+    expect(new Audio(bytes('RIFF', [0, 4])).isWav).toBe(false);
   });
 });
