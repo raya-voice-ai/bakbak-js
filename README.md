@@ -32,8 +32,8 @@ await audio.save('hello.wav'); // Node, Bun and Deno
 ```
 
 Request fields keep the API's own names (`voice_id`, `output_format`, `sample_rate`), so
-code, curl commands and the [API reference](https://docs.litwizlabs.com/api-reference/tts-websocket)
-read the same. Full documentation: [the JavaScript SDK guide](https://docs.litwizlabs.com/documentation/sdk-javascript).
+code, curl commands and the [API reference](https://docs.bakbak.si/text-to-speech/websocket)
+read the same. Full documentation: [the JavaScript SDK guide](https://docs.bakbak.si/sdks/javascript).
 
 ## Contents
 
@@ -382,7 +382,7 @@ try {
 ```
 
 `instanceof` works even if your application loads both the ESM and the CommonJS build.
-Every error code and what to do about it: [TTS errors](https://docs.litwizlabs.com/documentation/tts-errors).
+Every error code and what to do about it: [TTS errors](https://docs.bakbak.si/text-to-speech/errors).
 
 The API key never appears in an error, its causes, or a log line. A key that is empty or
 contains whitespace or control characters is refused when the client is created. The SDK
@@ -458,9 +458,9 @@ types itself. Set `BAKBAK_API_KEY`; `BAKBAK_BASE_URL` is optional.
 
 ## Learn more
 
-- [JavaScript SDK guide](https://docs.litwizlabs.com/documentation/sdk-javascript).
-- [WebSocket API reference](https://docs.litwizlabs.com/api-reference/tts-websocket).
-- [TTS errors](https://docs.litwizlabs.com/documentation/tts-errors).
+- [JavaScript SDK guide](https://docs.bakbak.si/sdks/javascript).
+- [WebSocket API reference](https://docs.bakbak.si/text-to-speech/websocket).
+- [TTS errors](https://docs.bakbak.si/text-to-speech/errors).
 - [`conformance/BEHAVIOR.md`](https://github.com/raya-voice-ai/bakbak-js/blob/main/conformance/BEHAVIOR.md):
   the behaviour every official Bakbak client follows (Python, JavaScript, the MCP server and
   the LiveKit plugin).
