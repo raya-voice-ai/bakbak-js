@@ -38,6 +38,7 @@ read the same. Full documentation: [the JavaScript SDK guide](https://docs.litwi
 ## Contents
 
 - [Voices](#voices)
+- [Languages and models](#languages-and-models)
 - [Whole files](#whole-files)
 - [Streaming over SSE](#streaming-over-sse)
 - [WebSocket](#websocket): contexts, LLM token streams, cancel, telephony
@@ -61,6 +62,19 @@ The API returns the whole catalog; the `model` and `language` filters are applie
 A voice belongs to one model, and `model` in a request must match it. m1 English voices use
 `language: 'en'`.
 
+## Languages and models
+
+| Model      | Languages                                                                                                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `m1`       | Hindi `hi`, English `en`, Kannada `kn`                                                                                                                                               |
+| `standard` | Hindi `hi`, Indian English `en-in`, US English `en-us`, Assamese `as`, Bengali `bn`, Gujarati `gu`, Kannada `kn`, Malayalam `ml`, Marathi `mr`, Nepali `ne`, Tamil `ta`, Telugu `te` |
+
+That is the voice catalog of 22 November 2026; `client.voices.list()` is the source of truth.
+Punjabi (`pa`) is accepted by the API and the `Language` type but has no voice yet.
+
+`speed` (0.5 to 1.5, default 1.0) changes `standard` voices only. `m1` voices accept it and
+speak at their own pace.
+
 ## Whole files
 
 ```ts
@@ -68,11 +82,14 @@ const audio = await client.tts.generate({ text, voice_id, language: 'hi', model:
 audio.data; // Uint8Array, exactly the bytes received
 audio.requestId; // quote it to support
 audio.contentType; // 'audio/wav' by default
+audio.encoding; // e.g. 'pcm_s16le', from the response headers or the WAV's own header
+audio.sampleRate; // e.g. 24000
 audio.toWav(); // the bytes as a WAV file (raw audio gets a header)
 await audio.save('out.wav');
 ```
 
-Without `output_format` the API returns 24 kHz WAV. Choose another format with
+Without `output_format` the API returns 24 kHz WAV and no format headers; `encoding` and
+`sampleRate` are then read from the WAV file itself. Choose another format with
 [`output_format`](#audio-formats-and-wav).
 
 ## Streaming over SSE
@@ -121,7 +138,7 @@ in order; different contexts run at the same time.
 const ws = client.tts.websocket({ voice_id, language: 'hi', model: 'm1' }); // defaults for every request
 await ws.connect(); // optional: open now so the first request pays no handshake
 
-const ctx = ws.context(); // or ws.context({ contextId: 'turn-7', speed: 1.1 })
+const ctx = ws.context(); // or ws.context({ contextId: 'turn-7', ...overrides })
 await ctx.send({ text: 'नमस्ते!' });
 await ctx.send({ text: 'मैं आपकी कैसे मदद कर सकती हूँ?' });
 ctx.endInput(); // no more requests on this context
@@ -163,7 +180,8 @@ for await (const audio of ctx.audio()) play(audio);
 await sending;
 ```
 
-Options: `sendStream(tokens, { params: { speed: 1.1 }, segmenter: { minChars: 30 }, endInput: false })`.
+Options: `sendStream(tokens, { params, segmenter: { minChars: 30 }, endInput: false })`, where
+`params` holds request fields for every sentence, over the context's defaults.
 
 ### Cancel (barge-in)
 
@@ -218,6 +236,9 @@ import { Segmenter, splitSentences } from 'bakbak';
 splitSentences('डॉ. शर्मा आज क्लिनिक में हैं। प्रो. वर्मा कल आएँगे।');
 // ['डॉ. शर्मा आज क्लिनिक में हैं।', 'प्रो. वर्मा कल आएँगे।']
 
+splitSentences('हाँ। ठीक है। मैं आपकी कैसे मदद कर सकती हूँ?');
+// ['हाँ।', 'ठीक है। मैं आपकी कैसे मदद कर सकती हूँ?']
+
 const segmenter = new Segmenter({ minChars: 20, maxChars: 400 });
 for await (const token of tokens) for (const sentence of segmenter.push(token)) speak(sentence);
 for (const sentence of segmenter.flush()) speak(sentence);
@@ -230,6 +251,9 @@ for (const sentence of segmenter.flush()) speak(sentence);
 | `maxChars`            | 400     | Longer text is wrapped at a clause, a space, or a cluster boundary. At most 5,000. |
 | `eagerFirstClause`    | false   | Until the first sentence is sent, also split after a clause (`,` `;` `:` `—`).     |
 | `firstClauseMinChars` | 24      | The shortest first clause `eagerFirstClause` sends alone.                          |
+
+Not every `।`, `॥` or `.` starts a new request: after the first sentence, a sentence shorter
+than `minChars` (default 20) is joined with the next, as `ठीक है।` is above.
 
 ## Audio formats and WAV
 
@@ -253,6 +277,11 @@ Wrap raw audio in a WAV header with `toWav`:
 import { toWav } from 'bakbak';
 const wav = toWav(pcmBytes, { encoding: 'pcm_s16le', sampleRate: 24000 });
 ```
+
+`audio.toWav()` returns WAV unchanged and wraps raw audio using its `encoding` and
+`sampleRate`. It refuses mp3, which has to be decoded with an audio library instead. For mp3,
+`audio.encoding` is `'mp3'` and `audio.sampleRate` is `undefined`: the rate is in the MP3
+frames.
 
 Decoded chunks start at offset 0 of their own `ArrayBuffer`, so you can view them directly:
 `new Int16Array(chunk.audio.buffer, 0, chunk.audio.length / 2)`.
@@ -293,6 +322,9 @@ await client.tts.generate(params, {
   extraBody: { new_field: true }, // API fields the SDK does not model yet
 });
 ```
+
+The API refuses fields it does not know with a 422, so `extraBody` is for fields the API
+supports before the SDK models them, not for experiments.
 
 An aborted call rejects with the signal's reason (an `AbortError`, or a `TimeoutError` for
 `AbortSignal.timeout`).

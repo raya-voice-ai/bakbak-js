@@ -46,7 +46,10 @@ export interface TTSParams {
   voice_id: string;
   language: Language;
   model?: Model | undefined;
-  /** 0.5 to 1.5; default 1.0. */
+  /**
+   * 0.5 to 1.5; default 1.0. Changes `standard` voices only: `m1` voices accept it and speak
+   * at their own pace.
+   */
   speed?: number | undefined;
   output_format?: OutputFormat | undefined;
 }
