@@ -17,6 +17,10 @@ export interface WavOptions {
   sampleRate: number;
 }
 
+/** Thrown for mp3, which has to be decoded rather than wrapped. */
+const MP3_TO_WAV =
+  "MP3 audio cannot be wrapped in WAV; decode it with an audio library, or request output_format: { container: 'wav', encoding: 'pcm_s16le' } instead.";
+
 const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
 
 function ascii(view: DataView, offset: number, text: string): void {
@@ -75,12 +79,17 @@ export function wavFormat(data: Uint8Array): { encoding: string; sampleRate: num
   return undefined;
 }
 
+function mediaType(contentType: string | undefined): string | undefined {
+  return contentType?.split(';')[0]?.trim().toLowerCase();
+}
+
 /**
  * Wraps raw mono audio in a WAV header (BEHAVIOR.md §5.2): the canonical 44-byte PCM header
  * for `pcm_s16le`; for `pcm_f32le`, `pcm_alaw` and `pcm_mulaw` an 18-byte `fmt ` chunk plus
- * a `fact` chunk, 58 bytes in all.
+ * a `fact` chunk, 58 bytes in all. Throws for mp3, which has to be decoded instead.
  */
 export function toWav(pcm: Uint8Array, options: WavOptions): Uint8Array {
+  if (options.encoding === 'mp3') throw new BakbakError(MP3_TO_WAV);
   const format = WAV_FORMATS[options.encoding];
   if (!format) {
     throw new BakbakError(
@@ -188,13 +197,17 @@ export class Audio {
 
   /**
    * The audio as a WAV file: the bytes unchanged if they already are one, else raw audio
-   * wrapped in a WAV header. Throws for mp3 and for raw audio of unknown format.
+   * wrapped in a WAV header. Throws for mp3, which has to be decoded instead, and for raw
+   * audio whose encoding or sample rate is unknown.
    */
   toWav(): Uint8Array {
     if (this.isWav) return this.data;
+    if (this.encoding === 'mp3' || mediaType(this.contentType) === 'audio/mpeg') {
+      throw new BakbakError(MP3_TO_WAV);
+    }
     if (this.encoding === undefined || this.sampleRate === undefined) {
       throw new BakbakError(
-        'The encoding or sample rate of this audio is unknown; call toWav(audio.data, { encoding, sampleRate }) instead.',
+        "The response did not state this audio's encoding and sample rate, so it cannot be wrapped in WAV; if you know them, call toWav(audio.data, { encoding, sampleRate }).",
       );
     }
     return toWav(this.data, { encoding: this.encoding, sampleRate: this.sampleRate });

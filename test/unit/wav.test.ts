@@ -60,8 +60,14 @@ describe('toWav (BEHAVIOR.md §5.2)', () => {
   }
 
   it('refuses unknown encodings and bad sample rates', () => {
-    expect(() => toWav(new Uint8Array(2), { encoding: 'mp3', sampleRate: 8000 })).toThrow(BakbakError);
+    expect(() => toWav(new Uint8Array(2), { encoding: 'opus', sampleRate: 8000 })).toThrow(BakbakError);
     expect(() => toWav(new Uint8Array(2), { encoding: 'pcm_s16le', sampleRate: 0 })).toThrow(BakbakError);
+  });
+
+  it('says that mp3 has to be decoded, not wrapped', () => {
+    expect(() => toWav(new Uint8Array(2), { encoding: 'mp3', sampleRate: 24000 })).toThrow(
+      /MP3 audio cannot be wrapped in WAV; decode it with an audio library/,
+    );
   });
 });
 
@@ -231,11 +237,26 @@ describe('Audio', () => {
     expect(audio.requestId).toBe('r');
   });
 
-  it('explains what is missing for raw audio of unknown format, and refuses mp3', () => {
+  it('explains what is missing for raw audio of unknown format', () => {
     expect(() => new Audio(new Uint8Array(8)).toWav()).toThrow(/toWav\(audio.data/);
-    expect(() => new Audio(new Uint8Array(8), { encoding: 'mp3', sampleRate: 24000 }).toWav()).toThrow(
-      BakbakError,
+    expect(() => new Audio(new Uint8Array(8), { encoding: 'pcm_s16le' }).toWav()).toThrow(
+      /did not state this audio's encoding and sample rate/,
     );
+  });
+
+  it('says that mp3 has to be decoded, not wrapped, whatever the metadata says', () => {
+    const mp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const message = /MP3 audio cannot be wrapped in WAV; decode it with an audio library/;
+    expect(() => new Audio(mp3, { encoding: 'mp3' }).toWav()).toThrow(message);
+    expect(() => new Audio(mp3, { encoding: 'mp3', sampleRate: 24000 }).toWav()).toThrow(message);
+    expect(() => new Audio(mp3, { contentType: 'audio/mpeg' }).toWav()).toThrow(message);
+    expect(() => new Audio(mp3, { contentType: 'Audio/MPEG; charset=binary' }).toWav()).toThrow(message);
+    expect(() => new Audio(mp3, { contentType: 'audio/mpeg' }).toWav()).toThrow(BakbakError);
+  });
+
+  it('returns a WAV body unchanged even when it is labelled mp3', () => {
+    const wav = toWav(new Uint8Array(4), { encoding: 'pcm_s16le', sampleRate: 24000 });
+    expect(new Audio(wav, { encoding: 'mp3', contentType: 'audio/mpeg' }).toWav()).toBe(wav);
   });
 
   it('needs RIFF and WAVE to call the bytes WAV', () => {

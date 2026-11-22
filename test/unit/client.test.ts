@@ -180,6 +180,27 @@ describe('requests', () => {
     expect(garbage.sampleRate).toBeUndefined();
   });
 
+  it('reports mp3 with no sample rate, even when one was requested, and refuses to wrap it in WAV', async () => {
+    const server = await serve((_req, _body, res) => {
+      res.writeHead(200, {
+        'content-type': 'audio/mpeg',
+        'x-request-id': 'req_mp3',
+        'x-audio-format': 'mp3',
+      });
+      res.end(Buffer.from([0xff, 0xfb, 0x90, 0x64, 0, 0, 0, 0]));
+    });
+    const client = new Bakbak({ apiKey: 'k', baseURL: server.url });
+    const audio = await client.tts.generate({
+      ...PARAMS,
+      output_format: { container: 'mp3', sample_rate: 24000 },
+    });
+    expect(audio.encoding).toBe('mp3');
+    expect(audio.sampleRate).toBeUndefined();
+    expect(() => audio.toWav()).toThrow(
+      /MP3 audio cannot be wrapped in WAV; decode it with an audio library/,
+    );
+  });
+
   it('reuses one connection across calls', async () => {
     const server = await serve((req, _body, res) => {
       if (req.url === '/v1/voices') {
