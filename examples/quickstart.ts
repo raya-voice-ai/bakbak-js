@@ -1,7 +1,7 @@
 // Quickstart: list voices, synthesize a whole file, save it.
 //   BAKBAK_API_KEY=… npx tsx examples/quickstart.ts
 import { Bakbak } from 'bakbak';
-import { language, model, outPath, voice_id } from './_env';
+import { language, model, outPath, voice_id } from './_env.ts';
 
 const client = new Bakbak(); // reads BAKBAK_API_KEY (and BAKBAK_BASE_URL)
 

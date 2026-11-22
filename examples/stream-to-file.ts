@@ -3,7 +3,7 @@
 import { createWriteStream } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { Bakbak, toWav } from 'bakbak';
-import { language, model, outPath, voice_id } from './_env';
+import { language, model, outPath, voice_id } from './_env.ts';
 
 const client = new Bakbak();
 const started = performance.now();

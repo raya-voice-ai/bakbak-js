@@ -444,7 +444,8 @@ SDK headers, which the API's CORS policy would refuse.
 
 ## Examples
 
-Runnable with `npx tsx` (set `BAKBAK_API_KEY`; `BAKBAK_BASE_URL` is optional):
+Run them with `npx tsx`, or with plain `node` on Node 22.18 or newer, which strips TypeScript
+types itself. Set `BAKBAK_API_KEY`; `BAKBAK_BASE_URL` is optional.
 
 | Example                                                                                                        |                                                                                       |
 | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |

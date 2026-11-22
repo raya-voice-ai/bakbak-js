@@ -7,7 +7,7 @@
 //   BAKBAK_API_KEY=… BAKBAK_BASE_URL=… npx tsx examples/bench-ttfa.ts [N]
 // N defaults to 20 per transport. BAKBAK_BENCH_TEXT overrides the sentence.
 import { Bakbak, type OutputFormat, type TTSWebSocket } from 'bakbak';
-import { language, model, voice_id } from './_env';
+import { language, model, voice_id } from './_env.ts';
 
 const N = Number(process.argv[2] ?? process.env.BAKBAK_BENCH_N ?? 20);
 const text = process.env.BAKBAK_BENCH_TEXT ?? 'नमस्ते, आप कैसे हैं?';

@@ -7,7 +7,7 @@
 //   BAKBAK_API_KEY=… BAKBAK_BASE_URL=… [OPENAI_API_KEY=…] npx tsx examples/llm-tokens.ts
 import { writeFile } from 'node:fs/promises';
 import { Bakbak, toWav } from 'bakbak';
-import { language, model, outPath, voice_id } from './_env';
+import { language, model, outPath, voice_id } from './_env.ts';
 
 async function* fakeTokens(): AsyncGenerator<string> {
   const reply = 'जी हाँ, आपका रिचार्ज सफल रहा। आपका नया बैलेंस पाँच सौ रुपये है। क्या मैं और कुछ मदद करूँ?';
