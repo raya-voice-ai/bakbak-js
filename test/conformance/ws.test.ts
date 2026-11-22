@@ -133,11 +133,37 @@ async function runScript(ws: WsSocket, n: number, steps: Step[], problems: strin
   }
 }
 
-async function startServer(connections: Connection[]): Promise<MockWsServer> {
+/** The status line, headers and body of a refused upgrade. */
+function refusal(reject: { status: number; headers: Record<string, string>; json: unknown }): string {
+  const body = JSON.stringify(reject.json);
+  const headers = {
+    ...reject.headers,
+    'content-length': String(Buffer.byteLength(body)),
+    connection: 'close',
+  };
+  const lines = Object.entries(headers).map(([k, v]) => `${k}: ${v}`);
+  return `HTTP/1.1 ${reject.status} ${STATUS_CODES[reject.status]}\r\n${lines.join('\r\n')}\r\n\r\n${body}`;
+}
+
+async function startServer(connections: Connection[], transport: 'ws' | 'global'): Promise<MockWsServer> {
   const state = { connections: 0, problems: [] as string[], scripts: [] as Promise<void>[] };
   const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const sockets = new Set<Socket>();
-  const server = http.createServer((_req, res) => {
+  // The global WebSocket hides a refused upgrade, so the client asks with a plain GET to the
+  // same URL (BEHAVIOR.md §6.1). It gets what the last upgrade got if that was refused (the
+  // same key, refused the same way), else 426 like the real endpoint. Not a connection.
+  let lastRefusal: string | undefined;
+  // undici sends a refused upgrade a second time by itself, before the WebSocket reports the
+  // failure: that repeat gets the same refusal and is not another connection. A retry by the
+  // SDK would come after a sleep, which `sleeps` checks.
+  let repeatExpected = false;
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url?.split('?')[0] === '/v1/text-to-speech/ws') {
+      repeatExpected = false;
+      if (lastRefusal) res.socket?.end(lastRefusal);
+      else res.writeHead(426, { 'content-type': 'application/json' }).end('{"message":"Upgrade Required"}');
+      return;
+    }
     state.problems.push('unexpected plain HTTP request');
     res.writeHead(500).end();
   });
@@ -146,6 +172,11 @@ async function startServer(connections: Connection[]): Promise<MockWsServer> {
     s.on('close', () => sockets.delete(s));
   });
   server.on('upgrade', (req, socket: Socket, head) => {
+    if (repeatExpected && lastRefusal) {
+      repeatExpected = false;
+      socket.end(lastRefusal);
+      return;
+    }
     const n = state.connections++;
     const spec = connections[n];
     if (!spec) {
@@ -156,18 +187,12 @@ async function startServer(connections: Connection[]): Promise<MockWsServer> {
     if (req.url?.split('?')[0] !== '/v1/text-to-speech/ws')
       state.problems.push(`connection ${n}: path ${req.url}`);
     if ('reject' in spec) {
-      const body = JSON.stringify(spec.reject.json);
-      const headers = {
-        ...spec.reject.headers,
-        'content-length': String(Buffer.byteLength(body)),
-        connection: 'close',
-      };
-      const lines = Object.entries(headers).map(([k, v]) => `${k}: ${v}`);
-      socket.end(
-        `HTTP/1.1 ${spec.reject.status} ${STATUS_CODES[spec.reject.status]}\r\n${lines.join('\r\n')}\r\n\r\n${body}`,
-      );
+      lastRefusal = refusal(spec.reject);
+      repeatExpected = transport === 'global';
+      socket.end(lastRefusal);
       return;
     }
+    lastRefusal = undefined;
     for (const [name, value] of Object.entries(spec.expect_headers ?? {})) {
       const got = req.headers[name.toLowerCase()];
       if (got !== value) state.problems.push(`connection ${n}: header ${name}: ${String(got)} != ${value}`);
@@ -220,13 +245,7 @@ const nodeMajor = Number(process.versions.node.split('.')[0]);
 const transports: Array<'ws' | 'global'> = nodeMajor >= 22 ? ['ws', 'global'] : ['ws'];
 
 /** Scenarios a transport cannot express, and why. */
-const SKIPS: Record<string, Record<string, string>> = {
-  global: {
-    ws_handshake_401:
-      "The WHATWG WebSocket API does not expose a refused upgrade's status or body, so connect() can only " +
-      'raise APIConnectionError; undici also retries the refused handshake. Covered by the ws transport.',
-  },
-};
+const SKIPS: Record<string, Record<string, string>> = {};
 
 let current: MockWsServer | undefined;
 afterEach(async () => {
@@ -248,7 +267,7 @@ for (const transport of transports) {
         continue;
       }
       it(name, async () => {
-        const server = await startServer(scenario.connections);
+        const server = await startServer(scenario.connections, transport);
         current = server;
         const sleeps: number[] = [];
         const client = new Bakbak({

@@ -418,10 +418,12 @@ key to another address: a 3xx surfaces as an `APIStatusError` with its status.
 `ws` is an optional peer dependency, loaded only on Node and only when you open a WebSocket.
 Browser bundles never include it.
 
-Where the key goes in the URL, the SDK redacts it from anything it logs. Runtimes that use the
-global WebSocket cannot read why a handshake was refused. A wrong key then surfaces as
-`APIConnectionError`, not `AuthenticationError`; `client.voices.list()` with the same key
-shows the HTTP error.
+Where the key goes in the URL, the SDK redacts it from anything it logs. The global WebSocket
+does not say why a handshake was refused, so when one fails the SDK asks with one plain `GET`
+to the same URL, the key placed the same way, and raises the error the answer stands for: a
+wrong key is an `AuthenticationError` and is not retried, as with `ws`. If the API accepts the
+key and URL over HTTP, or the `GET` gets no answer either, the failure stays an
+`APIConnectionError` and is retried.
 
 **Browsers.** In a browser, the SDK refuses to start unless you pass
 `dangerouslyAllowBrowser: true`, because the API key would be visible to anyone using the

@@ -276,6 +276,7 @@ class Session {
             runtime: cfg.runtime,
             connectTimeout: cfg.connectTimeout,
             logger: cfg.logger,
+            fetch: cfg.fetch,
           },
           {
             onMessage: (data) => this.onMessage(conn, data),
