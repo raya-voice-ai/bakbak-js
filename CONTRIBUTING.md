@@ -76,8 +76,9 @@ version.
 2. Merging that pull request tags the release and creates a GitHub release.
 3. The same workflow (`.github/workflows/release.yml`) then publishes to npm with
    provenance, through npm trusted publishing (OIDC; no npm token is stored).
-   Pre-releases (`1.0.0-rc.N`) are published under the `next` dist-tag, others under
-   `latest`.
+   Stable versions are published under the `latest` dist-tag. Pre-releases (`1.0.0-rc.N`)
+   take `latest` too until a stable version exists, so `npm install bakbak` gets the newest
+   one; after that they go under `next`.
 
 The package is in release candidates until 1.0.0: each release bumps `-rc.N`. To release
 1.0.0, merge a commit whose message has the footer `Release-As: 1.0.0`.
