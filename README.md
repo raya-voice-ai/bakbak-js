@@ -370,8 +370,9 @@ key to another address: a 3xx surfaces as an `APIStatusError` with its status.
   `await client.warmup()` opens the connection before the first synthesis.
 - **Ask for the format you play**, such as `pcm_s16le` at your output rate or `pcm_mulaw` at
   8 kHz for telephony, so nothing needs converting.
-- Measure with [`examples/bench-ttfa.ts`](examples/bench-ttfa.ts), which reports time to first
-  audio for SSE and the WebSocket.
+- Measure with
+  [`examples/bench-ttfa.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/bench-ttfa.ts),
+  which reports time to first audio for SSE and the WebSocket.
 
 ## Runtimes and browsers
 
@@ -399,25 +400,28 @@ SDK headers, which the API's CORS policy would refuse.
 
 Runnable with `npx tsx` (set `BAKBAK_API_KEY`; `BAKBAK_BASE_URL` is optional):
 
-| Example                                                   |                                                                                       |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [`quickstart.ts`](examples/quickstart.ts)                 | List voices, synthesize, save a WAV.                                                  |
-| [`stream-to-file.ts`](examples/stream-to-file.ts)         | SSE streaming to a file, with time to first audio.                                    |
-| [`websocket-contexts.ts`](examples/websocket-contexts.ts) | Two contexts on one WebSocket.                                                        |
-| [`llm-tokens.ts`](examples/llm-tokens.ts)                 | Speak an LLM's reply as it is written (fake tokens, or any OpenAI-compatible stream). |
-| [`telephony-mulaw.ts`](examples/telephony-mulaw.ts)       | 8 kHz μ-law for telephony.                                                            |
-| [`bench-ttfa.ts`](examples/bench-ttfa.ts)                 | Time to first audio, p50/p95, SSE vs WebSocket.                                       |
+| Example                                                                                                        |                                                                                       |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`quickstart.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/quickstart.ts)                 | List voices, synthesize, save a WAV.                                                  |
+| [`stream-to-file.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/stream-to-file.ts)         | SSE streaming to a file, with time to first audio.                                    |
+| [`websocket-contexts.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/websocket-contexts.ts) | Two contexts on one WebSocket.                                                        |
+| [`llm-tokens.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/llm-tokens.ts)                 | Speak an LLM's reply as it is written (fake tokens, or any OpenAI-compatible stream). |
+| [`telephony-mulaw.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/telephony-mulaw.ts)       | 8 kHz μ-law for telephony.                                                            |
+| [`bench-ttfa.ts`](https://github.com/raya-voice-ai/bakbak-js/blob/main/examples/bench-ttfa.ts)                 | Time to first audio, p50/p95, SSE vs WebSocket.                                       |
 
 ## Learn more
 
 - [JavaScript SDK guide](https://docs.litwizlabs.com/documentation/sdk-javascript).
 - [WebSocket API reference](https://docs.litwizlabs.com/api-reference/tts-websocket).
 - [TTS errors](https://docs.litwizlabs.com/documentation/tts-errors).
-- [`conformance/BEHAVIOR.md`](conformance/BEHAVIOR.md): the behaviour every official Bakbak
-  client follows (Python, JavaScript, the MCP server and the LiveKit plugin).
+- [`conformance/BEHAVIOR.md`](https://github.com/raya-voice-ai/bakbak-js/blob/main/conformance/BEHAVIOR.md):
+  the behaviour every official Bakbak client follows (Python, JavaScript, the MCP server and
+  the LiveKit plugin).
 - [Python SDK](https://github.com/raya-voice-ai/bakbak-python).
-- [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md).
+- [CHANGELOG](https://github.com/raya-voice-ai/bakbak-js/blob/main/CHANGELOG.md),
+  [CONTRIBUTING](https://github.com/raya-voice-ai/bakbak-js/blob/main/CONTRIBUTING.md),
+  [SECURITY](https://github.com/raya-voice-ai/bakbak-js/blob/main/SECURITY.md).
 
 ## License
 
-[Apache-2.0](LICENSE). Copyright 2026 Raya Voice AI.
+[Apache-2.0](https://github.com/raya-voice-ai/bakbak-js/blob/main/LICENSE). Copyright 2026 Raya Voice AI.
