@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { textOf } from '../../src/text/tokens';
+import { isKnownShape, textOf } from '../../src/text/tokens';
 
 describe('textOf: LLM stream events by duck typing', () => {
   it('passes strings through', () => {
@@ -118,5 +118,38 @@ describe('textOf: LLM stream events by duck typing', () => {
     expect(textOf(42)).toBeUndefined();
     expect(textOf(null)).toBeUndefined();
     expect(textOf({ foo: 'bar' })).toBeUndefined();
+  });
+});
+
+describe('isKnownShape: the shapes textOf reads, with or without text', () => {
+  it('knows strings, null and undefined (mapped events without text) and the event shapes', () => {
+    class Legacy {
+      text() {
+        return 'x';
+      }
+    }
+    for (const item of [
+      '',
+      null,
+      undefined,
+      { choices: [] },
+      { type: 'message_stop' },
+      { candidates: [] },
+      { text: undefined },
+      new Legacy(),
+      {
+        get text() {
+          return undefined;
+        },
+      },
+    ]) {
+      expect(isKnownShape(item)).toBe(true);
+    }
+  });
+
+  it('does not know anything else', () => {
+    for (const item of [42, () => 'x', { choices: {} }, { type: 1 }, { candidates: {} }, {}]) {
+      expect(isKnownShape(item)).toBe(false);
+    }
   });
 });

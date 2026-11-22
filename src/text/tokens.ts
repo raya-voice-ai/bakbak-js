@@ -59,3 +59,26 @@ function geminiText(parts: unknown[]): string | undefined {
   }
   return text;
 }
+
+/**
+ * Whether an item has one of the shapes `textOf` reads, text or not: a string, `null` or
+ * `undefined` (what code that maps events to text yields for an event without any), or an
+ * object with an array `choices`, a string `type`, an array `candidates` or a `text` property
+ * (a value, getter or method). sendStream fails when its input had items, none had text and
+ * some had none of these shapes (BEHAVIOR.md §6.2).
+ */
+export function isKnownShape(item: unknown): boolean {
+  if (typeof item === 'string' || item === null || item === undefined) return true;
+  if (typeof item !== 'object') return false;
+  const o = item as Record<string, unknown>;
+  return Array.isArray(o.choices) || typeof o.type === 'string' || Array.isArray(o.candidates) || 'text' in o;
+}
+
+/** The error of a sendStream whose input had no text and items of unknown shapes. */
+export function noTextMessage(items: number): string {
+  return (
+    `sendStream found no text in ${items} item${items === 1 ? '' : 's'}. It reads strings, OpenAI ` +
+    'Chat Completions and Responses events, Anthropic events, Gemini responses (SDK objects or raw ' +
+    'JSON) and Vercel AI SDK parts; map other events to strings first.'
+  );
+}
