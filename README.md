@@ -167,9 +167,10 @@ as long as the connection lives.
 ### Speaking an LLM's reply as it is written
 
 `ctx.sendStream()` takes tokens as they arrive, splits them into sentences, sends each
-sentence as soon as it is complete, and calls `endInput()` at the end. It accepts strings and
+sentence as soon as it is complete, and calls `endInput()` at the end. It accepts strings,
 stream events from the OpenAI (Chat Completions and Responses), Anthropic, Google Gemini and
-Vercel AI SDKs, found by duck typing, without importing any of them:
+Vercel AI SDKs, and Gemini's raw REST/SSE JSON (`candidates`, with thought parts skipped),
+found by duck typing, without importing any of them:
 
 ```ts
 const llm = await openai.chat.completions.create({ model, messages, stream: true });
@@ -182,6 +183,11 @@ await sending;
 
 Options: `sendStream(tokens, { params, segmenter: { minChars: 30 }, endInput: false })`, where
 `params` holds request fields for every sentence, over the context's defaults.
+
+Items without text, such as tool calls, are skipped. If the tokens end without any text and
+some item had none of the shapes above, `sendStream()` ends input as usual and then rejects
+with a `BakbakError` that names the shapes it reads, rather than return having sent nothing.
+Map other events to strings first; `null` or `undefined` for an event without text is fine.
 
 ### Cancel (barge-in)
 
@@ -278,10 +284,16 @@ import { toWav } from 'bakbak';
 const wav = toWav(pcmBytes, { encoding: 'pcm_s16le', sampleRate: 24000 });
 ```
 
+`toWav` refuses bytes that are not a whole number of samples (an odd length for
+`pcm_s16le`, a length that is not a multiple of 4 for `pcm_f32le`) rather than write a header
+that disagrees with them. An odd length of 8-bit audio gets the pad byte WAV requires.
+
 `audio.toWav()` returns WAV unchanged and wraps raw audio using its `encoding` and
 `sampleRate`. It refuses mp3, which has to be decoded with an audio library instead. For mp3,
 `audio.encoding` is `'mp3'` and `audio.sampleRate` is `undefined`: the rate is in the MP3
-frames.
+frames. A stream sent without `output_format` does not state its encoding and rate, so its
+`toAudio().toWav()` throws; send `output_format`, or call
+`toWav(audio.data, { encoding, sampleRate })` if you know them.
 
 Decoded chunks start at offset 0 of their own `ArrayBuffer`, so you can view them directly:
 `new Int16Array(chunk.audio.buffer, 0, chunk.audio.length / 2)`.
