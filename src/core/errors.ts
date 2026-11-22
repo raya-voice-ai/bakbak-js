@@ -58,85 +58,87 @@ export class BakbakError extends Error {
     return Array.isArray(names) && names.includes(this.prototype.name);
   }
 
+  // `this`, not the class's own name: a class that names itself is renamed by esbuild
+  // (`class _BakbakError`), and console.log and err.constructor.name then show the wrong name.
   static {
-    BakbakError.prototype.name = 'BakbakError';
+    this.prototype.name = 'BakbakError';
   }
 }
 
 /** The service answered with an error, or a stream broke. */
 export class APIError extends BakbakError {
   static {
-    APIError.prototype.name = 'APIError';
+    this.prototype.name = 'APIError';
   }
 }
 
 /** An HTTP error status, or an in-band error event before any audio. */
 export class APIStatusError extends APIError {
   static {
-    APIStatusError.prototype.name = 'APIStatusError';
+    this.prototype.name = 'APIStatusError';
   }
 }
 
 /** 400 */
 export class BadRequestError extends APIStatusError {
   static {
-    BadRequestError.prototype.name = 'BadRequestError';
+    this.prototype.name = 'BadRequestError';
   }
 }
 
 /** 401: the API key is missing or wrong. */
 export class AuthenticationError extends APIStatusError {
   static {
-    AuthenticationError.prototype.name = 'AuthenticationError';
+    this.prototype.name = 'AuthenticationError';
   }
 }
 
 /** 402: the account's balance is too low; `body.required_inr` and `body.available_inr` say by how much. */
 export class InsufficientCreditsError extends APIStatusError {
   static {
-    InsufficientCreditsError.prototype.name = 'InsufficientCreditsError';
+    this.prototype.name = 'InsufficientCreditsError';
   }
 }
 
 /** 403 */
 export class PermissionDeniedError extends APIStatusError {
   static {
-    PermissionDeniedError.prototype.name = 'PermissionDeniedError';
+    this.prototype.name = 'PermissionDeniedError';
   }
 }
 
 /** 404: an unknown voice, or an unknown path. */
 export class NotFoundError extends APIStatusError {
   static {
-    NotFoundError.prototype.name = 'NotFoundError';
+    this.prototype.name = 'NotFoundError';
   }
 }
 
 /** 413: the text or the body is too long. */
 export class RequestTooLargeError extends APIStatusError {
   static {
-    RequestTooLargeError.prototype.name = 'RequestTooLargeError';
+    this.prototype.name = 'RequestTooLargeError';
   }
 }
 
 /** 422: the request failed validation; the message lists each field. */
 export class UnprocessableEntityError extends APIStatusError {
   static {
-    UnprocessableEntityError.prototype.name = 'UnprocessableEntityError';
+    this.prototype.name = 'UnprocessableEntityError';
   }
 }
 
 /** 429: the account's concurrency limit (`body.concurrency_limit`) is reached. */
 export class RateLimitError extends APIStatusError {
   static {
-    RateLimitError.prototype.name = 'RateLimitError';
+    this.prototype.name = 'RateLimitError';
   }
 }
 
 /** Any status of 500 or more. */
 export class InternalServerError extends APIStatusError {
   static {
-    InternalServerError.prototype.name = 'InternalServerError';
+    this.prototype.name = 'InternalServerError';
   }
 }
 
@@ -160,7 +162,7 @@ export class StreamInterruptedError extends APIError {
   }
 
   static {
-    StreamInterruptedError.prototype.name = 'StreamInterruptedError';
+    this.prototype.name = 'StreamInterruptedError';
   }
 }
 
@@ -171,14 +173,14 @@ export class APIConnectionError extends BakbakError {
   }
 
   static {
-    APIConnectionError.prototype.name = 'APIConnectionError';
+    this.prototype.name = 'APIConnectionError';
   }
 }
 
 /** Nothing arrived within the timeout. */
 export class APITimeoutError extends APIConnectionError {
   static {
-    APITimeoutError.prototype.name = 'APITimeoutError';
+    this.prototype.name = 'APITimeoutError';
   }
 }
 
@@ -199,7 +201,7 @@ export class WebSocketClosedError extends APIConnectionError {
   }
 
   static {
-    WebSocketClosedError.prototype.name = 'WebSocketClosedError';
+    this.prototype.name = 'WebSocketClosedError';
   }
 }
 
