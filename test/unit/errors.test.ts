@@ -35,8 +35,38 @@ describe('error message rendering (BEHAVIOR.md §3.2)', () => {
         { type: 'value_error', loc: ['body', 'output_format', 'encoding'], msg: 'Value error, bad' },
       ],
     };
+    expect(renderMessage(body, 422)).toBe('voice_id: Field required; output_format.encoding: bad');
+  });
+
+  it('drops only a leading "Value error, ", and skips an entry that is nothing but it', () => {
+    expect(
+      renderMessage({ detail: [{ loc: ['body', 'a'], msg: 'Value error, x. Value error, y' }] }, 422),
+    ).toBe('a: x. Value error, y');
+    expect(renderMessage({ detail: [{ loc: ['body', 'a'], msg: 'x, Value error, y' }] }, 422)).toBe(
+      'a: x, Value error, y',
+    );
+    expect(
+      renderMessage({ message: 'Shown', detail: [{ loc: ['body', 'a'], msg: 'Value error, ' }] }, 422),
+    ).toBe('Shown');
+    // A string entry is itself.
+    expect(renderMessage({ detail: ['Value error, kept'] }, 422)).toBe('Value error, kept');
+  });
+
+  it('uses a message that already names the field as it is (production 422 for speed)', () => {
+    const body = {
+      detail: [
+        {
+          type: 'value_error',
+          loc: ['body', 'speed'],
+          msg: 'Value error, speed must be between 0.5 and 1.5 (inclusive)',
+          input: 3,
+        },
+      ],
+      error_code: 'invalid_request',
+      message: 'Invalid request: speed: speed must be between 0.5 and 1.5 (inclusive).',
+    };
     expect(renderMessage(body, 422)).toBe(
-      'voice_id: Field required; output_format.encoding: Value error, bad',
+      'Invalid request: speed: speed must be between 0.5 and 1.5 (inclusive).',
     );
   });
 
