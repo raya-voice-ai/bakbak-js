@@ -1092,8 +1092,8 @@ export class WebSocketContext {
   /**
    * Sends text that arrives in pieces (LLM tokens), one sentence per request as soon as each
    * sentence is complete, then calls `endInput()` unless `endInput: false`. Accepts strings
-   * and OpenAI, Anthropic, Gemini and Vercel AI SDK stream events. Resolves when every
-   * sentence is on the wire.
+   * and OpenAI, Anthropic, Gemini (SDK objects or raw REST/SSE JSON) and Vercel AI SDK
+   * stream events. Resolves when every sentence is on the wire.
    */
   sendStream(
     source: AsyncIterable<unknown> | Iterable<unknown>,

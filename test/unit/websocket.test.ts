@@ -334,6 +334,20 @@ describe('WebSocket: sendStream', () => {
     ]);
   });
 
+  it("accepts Gemini's raw REST/SSE JSON", async () => {
+    const m = await mock((peer, msg) => answer(peer, msg));
+    const ws = socketFor(m);
+    const ctx = ws.context();
+    const gemini = [
+      [{ text: 'Thinking it over.', thought: true }],
+      [{ text: 'Hello there. ' }, { text: 'How' }],
+      [{ text: ' are you?' }],
+    ].map((parts) => ({ candidates: [{ content: { role: 'model', parts } }], modelVersion: 'g' }));
+    await ctx.sendStream(gemini);
+    await drain(ctx.events());
+    expect(m.peers[0]?.received.map((r) => r.text)).toEqual(['Hello there.', 'How are you?']);
+  });
+
   it('surfaces a failing token source through sendStream and events()', async () => {
     const m = await mock((peer, msg) => answer(peer, msg));
     const ws = socketFor(m);
